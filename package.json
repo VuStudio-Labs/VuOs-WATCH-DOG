@@ -1,11 +1,16 @@
 {
   "name": "vu-watchdog",
   "version": "1.0.0",
+  "description": "System health monitor and watchdog for Vu One OS display wall installations",
+  "author": "Alvin Renz Teves <alvin@vu.studio>",
+  "license": "UNLICENSED",
+  "private": true,
   "type": "module",
   "scripts": {
     "dev": "bun --watch run src/index.ts",
     "start": "bun run src/index.ts",
-    "build": "bun build --compile src/index.ts --outfile vu-watchdog.exe && bun scripts/set-icon.ts"
+    "build": "bun build --compile src/index.ts --outfile vu-watchdog.exe && bun scripts/set-icon.ts",
+    "build:ico": "bun scripts/build-ico.ts"
   },
   "dependencies": {
     "mqtt": "^5.14.1"

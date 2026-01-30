@@ -167,8 +167,11 @@ Dev dependencies: `@resvg/resvg-js` (SVG rendering), `rcedit` (exe icon patching
 
 ## License
 
-Proprietary. Copyright Vu Studio.
+Proprietary. All rights reserved.
 
 ## Author
 
-**Alvin Renz Teves** — [Vu Studio](https://vu.studio)
+**Alvin Renz Teves**
+
+Vu Labs — Research & Development
+[vu.studio](https://vu.studio)

@@ -1,2 +1,29 @@
+# Dependencies
 node_modules/
+
+# Build output
 vu-watchdog.exe
+vu-watchdog-backup.exe
+dist/
+
+# Environment
+.env
+.env.*
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Debug artifacts
+extracted-icon.ico
+
+# Logs
+*.log
