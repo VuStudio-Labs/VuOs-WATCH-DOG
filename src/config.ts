@@ -7,7 +7,21 @@ export interface AppConfig {
   httpPort: number;
 }
 
-const VUOS_DIR = "C:\\Program Files (x86)\\Vu One OS\\Vu One_Data\\StreamingAssets\\Vu One";
+const VUOS_CANDIDATES = [
+  "C:\\Program Files (x86)\\Vu One\\Vu One_Data\\StreamingAssets\\Vu One",
+  "C:\\Program Files (x86)\\Vu One OS\\Vu One_Data\\StreamingAssets\\Vu One",
+];
+
+function detectVuosDir(): string {
+  for (const dir of VUOS_CANDIDATES) {
+    if (fs.existsSync(path.join(dir, "app.config.json"))) return dir;
+  }
+  throw new Error(
+    `Vu One OS not found. Checked:\n${VUOS_CANDIDATES.join("\n")}`
+  );
+}
+
+export const VUOS_DIR = detectVuosDir();
 const APP_CONFIG_PATH = path.join(VUOS_DIR, "app.config.json");
 const SYSTEM_CONFIG_PATH = path.join(VUOS_DIR, "system.config.json");
 

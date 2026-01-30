@@ -1,8 +1,8 @@
 import * as fs from "fs";
 import * as path from "path";
 import type { AppMetrics, ServerLockInfo, LogMetrics } from "../types";
+import { VUOS_DIR } from "../config";
 
-const VUOS_DIR = "C:\\Program Files (x86)\\Vu One OS\\Vu One_Data\\StreamingAssets\\Vu One";
 const LOCK_FILE = path.join(VUOS_DIR, "vu-server.lock");
 const ERROR_LOG = path.join(VUOS_DIR, "logs", "error.log");
 
