@@ -1,0 +1,16 @@
+{
+  "name": "vu-watchdog",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch run src/index.ts",
+    "start": "bun run src/index.ts",
+    "build": "bun build --compile src/index.ts --outfile vu-watchdog.exe"
+  },
+  "dependencies": {
+    "mqtt": "^5.14.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.3"
+  }
+}

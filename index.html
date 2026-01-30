@@ -1,0 +1,1503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MQTT Telemetry Monitor</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/date-fns@3.3.1/cdn.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+  <script src="https://unpkg.com/mqtt@4.3.7/dist/mqtt.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    *::-webkit-scrollbar { width: 0; }
+    * { scrollbar-width: none; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: #0a0a0a;
+      color: #e5e5e5;
+      min-height: 100vh;
+      padding: 24px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid #262626;
+    }
+    .header h1 { font-size: 20px; font-weight: 600; color: #fafafa; }
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: #a3a3a3;
+    }
+    .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #dc2626;
+    }
+    .status-dot.connected {
+      background: #22c55e;
+      box-shadow: 0 0 6px #22c55e66;
+    }
+    .controls {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+    }
+    .controls label { font-size: 13px; color: #a3a3a3; }
+    .controls input, .controls button, .controls select {
+      background: #171717;
+      border: 1px solid #333;
+      color: #e5e5e5;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      outline: none;
+    }
+    .controls input:focus, .controls select:focus { border-color: #525252; }
+    .controls button {
+      cursor: pointer;
+      background: #262626;
+      font-weight: 500;
+      transition: background 0.15s;
+    }
+    .controls button:hover { background: #333; }
+    .controls button.active {
+      background: #22c55e;
+      color: #000;
+      border-color: #22c55e;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .card {
+      background: #141414;
+      border: 1px solid #262626;
+      border-radius: 10px;
+      padding: 20px;
+    }
+    .card-title {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #737373;
+      margin-bottom: 16px;
+    }
+    .metric-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 0;
+    }
+    .metric-label { font-size: 13px; color: #a3a3a3; }
+    .metric-value {
+      font-size: 13px;
+      font-weight: 600;
+      color: #fafafa;
+      font-variant-numeric: tabular-nums;
+    }
+    .metric-value.warn { color: #f59e0b; }
+    .metric-value.danger { color: #ef4444; }
+    .metric-value.good { color: #22c55e; }
+    .bar-container {
+      width: 100%;
+      height: 6px;
+      background: #262626;
+      border-radius: 3px;
+      margin-top: 4px;
+      overflow: hidden;
+    }
+    .bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.5s ease, background 0.3s;
+    }
+    .big-value {
+      font-size: 36px;
+      font-weight: 700;
+      color: #fafafa;
+      font-variant-numeric: tabular-nums;
+    }
+    .big-unit {
+      font-size: 14px;
+      font-weight: 400;
+      color: #737373;
+      margin-left: 4px;
+    }
+    .chart-card {
+      background: #141414;
+      border: 1px solid #262626;
+      border-radius: 10px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .chart-container {
+      position: relative;
+      height: 200px;
+    }
+    .charts-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(480px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .log-container {
+      background: #141414;
+      border: 1px solid #262626;
+      border-radius: 10px;
+      padding: 16px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .log-entry {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 11px;
+      color: #737373;
+      padding: 3px 0;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    .log-entry:last-child { border-bottom: none; }
+    .log-time { color: #525252; }
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #525252;
+    }
+    .empty-state p { font-size: 14px; margin-top: 8px; }
+    .data-points {
+      font-size: 11px;
+      color: #525252;
+      font-variant-numeric: tabular-nums;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div style="display:flex;align-items:center;gap:16px;">
+      <h1>MQTT Telemetry Monitor</h1>
+      <div id="wallStatus" style="display:none;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600;letter-spacing:0.03em;"></div>
+    </div>
+    <div class="status">
+      <span class="data-points" id="dataPoints"></span>
+      <div class="status-dot" id="statusDot"></div>
+      <span id="statusText">Disconnected</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <label>Wall ID:</label>
+    <input type="text" id="wallIdInput" value="5538" style="width: 120px;" placeholder="e.g. 5538" />
+    <button id="connectBtn" onclick="toggleConnection()">Connect</button>
+    <label style="margin-left:12px;">History:</label>
+    <select id="historyRange" onchange="updateChartRange()">
+      <option value="0.5" selected>30 sec</option>
+      <option value="30">30 min</option>
+      <option value="60">1 hour</option>
+      <option value="180">3 hours</option>
+      <option value="0">All</option>
+    </select>
+  </div>
+
+  <div id="dashboard" style="display:none;">
+    <!-- Live Metrics -->
+    <div class="grid">
+      <div class="card">
+        <div class="card-title">System</div>
+        <div class="metric-row">
+          <span class="metric-label">CPU</span>
+          <span class="metric-value" id="cpuModel">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">CPU Usage</span>
+          <span class="metric-value" id="cpuUsage">—</span>
+        </div>
+        <div class="bar-container"><div class="bar-fill" id="cpuBar" style="width:0%;background:#22c55e;"></div></div>
+        <div class="metric-row" style="margin-top:12px;">
+          <span class="metric-label">RAM</span>
+          <span class="metric-value" id="ramUsage">—</span>
+        </div>
+        <div class="bar-container"><div class="bar-fill" id="ramBar" style="width:0%;background:#22c55e;"></div></div>
+        <div class="metric-row" style="margin-top:12px;">
+          <span class="metric-label">Uptime</span>
+          <span class="metric-value" id="uptime">—</span>
+        </div>
+
+        <div style="border-top:1px solid #262626;margin:14px 0;"></div>
+        <div class="card-title" style="margin-bottom:12px;">GPU</div>
+        <div class="metric-row">
+          <span class="metric-label">Model</span>
+          <span class="metric-value" id="gpuName">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Usage</span>
+          <span class="metric-value" id="gpuUsage">—</span>
+        </div>
+        <div class="bar-container"><div class="bar-fill" id="gpuBar" style="width:0%;background:#22c55e;"></div></div>
+        <div class="metric-row" style="margin-top:12px;">
+          <span class="metric-label">VRAM</span>
+          <span class="metric-value" id="gpuMem">—</span>
+        </div>
+        <div class="bar-container"><div class="bar-fill" id="gpuMemBar" style="width:0%;background:#22c55e;"></div></div>
+        <div class="metric-row" style="margin-top:12px;">
+          <span class="metric-label">Temperature</span>
+          <span class="metric-value" id="gpuTemp">—</span>
+        </div>
+
+        <div style="border-top:1px solid #262626;margin:14px 0;"></div>
+        <div class="card-title" style="margin-bottom:12px;">Disk</div>
+        <div class="metric-row">
+          <span class="metric-label">Disk Usage</span>
+          <span class="metric-value" id="diskPercent">—<span style="font-weight:400;color:#737373;">%</span></span>
+        </div>
+        <div class="bar-container"><div class="bar-fill" id="diskBar" style="width:0%;background:#22c55e;"></div></div>
+        <div class="metric-row" style="margin-top:8px;">
+          <span class="metric-label">Used / Total</span>
+          <span class="metric-value" id="diskUsage">—</span>
+        </div>
+      </div>
+
+      <div class="card" id="networkConfigCard">
+        <div class="card-title">Network</div>
+        <div class="metric-row">
+          <span class="metric-label">Internet</span>
+          <span class="metric-value" id="netOnline">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Latency</span>
+          <span class="metric-value" id="netLatency">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Local Server</span>
+          <span class="metric-value" id="netLocal">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Connected Peers</span>
+          <span class="metric-value" id="netPeers">—</span>
+        </div>
+
+        <div id="configSection" style="display:none;">
+          <div style="border-top:1px solid #262626;margin:14px 0;"></div>
+          <div class="card-title" style="margin-bottom:12px;">Wall Configuration</div>
+          <div class="metric-row">
+            <span class="metric-label">Wall IP</span>
+            <span class="metric-value" id="cfgWallIp">—</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">Processor Mode</span>
+            <span class="metric-value" id="cfgProcessor">—</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">Displays</span>
+            <span class="metric-value" id="cfgDisplays">—</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">Active Assets</span>
+            <span class="metric-value" id="cfgAssets">—</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">Ports</span>
+            <span class="metric-value" id="cfgConnected">—</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">OSC Endpoint</span>
+            <span class="metric-value" id="cfgCameras">—</span>
+          </div>
+          <div id="cfgDisplaysList" style="margin-top:10px;"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Application</div>
+        <div class="metric-row">
+          <span class="metric-label">VUOS Process</span>
+          <span class="metric-value" id="appVuos">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Server Process</span>
+          <span class="metric-value" id="appServer">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Server Version</span>
+          <span class="metric-value" id="appVersion">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Wall ID</span>
+          <span class="metric-value" id="wallId">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Last Update</span>
+          <span class="metric-value" id="lastUpdate">—</span>
+        </div>
+
+        <div style="border-top:1px solid #262626;margin:14px 0;"></div>
+        <div class="card-title" style="margin-bottom:12px;">Server Health</div>
+        <div class="metric-row">
+          <span class="metric-label">Status</span>
+          <span class="metric-value" id="lockHealthy">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">PID</span>
+          <span class="metric-value" id="lockPid">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Heartbeat Age</span>
+          <span class="metric-value" id="lockHeartbeatAge">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Last Heartbeat</span>
+          <span class="metric-value" id="lockLastHeartbeat">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Process Uptime</span>
+          <span class="metric-value" id="lockUptime">—</span>
+        </div>
+
+        <div style="border-top:1px solid #262626;margin:14px 0;"></div>
+        <div class="card-title" style="margin-bottom:12px;">Error Log</div>
+        <div class="metric-row">
+          <span class="metric-label">Recent Errors</span>
+          <span class="metric-value" id="errCount">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Last Error Time</span>
+          <span class="metric-value" id="errTime">—</span>
+        </div>
+        <div style="margin-top:10px;padding:10px;background:#1a1a1a;border-radius:6px;font-family:'SF Mono','Fira Code',monospace;font-size:11px;color:#ef4444;word-break:break-all;min-height:36px;" id="errMessage">—</div>
+      </div>
+
+      <div class="card" id="assetPreviewCard" style="display:none;">
+        <div class="card-title">Live Asset</div>
+        <div id="assetPreviewContainer" style="background:#0a0a0a;border-radius:6px;overflow:hidden;border:1px solid #262626;aspect-ratio:16/9;margin-bottom:12px;position:relative;">
+          <img id="assetPreviewImg" style="width:100%;height:100%;display:block;object-fit:contain;" />
+          <video id="assetPreviewVideo" style="width:100%;height:100%;display:none;object-fit:contain;" muted autoplay loop playsinline></video>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Title</span>
+          <span class="metric-value" id="assetTitle" style="font-size:12px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Type</span>
+          <span class="metric-value" id="assetType">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Provider</span>
+          <span class="metric-value" id="assetProvider">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Loaded At</span>
+          <span class="metric-value" id="assetTime">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label" id="assetMeta"></span>
+          <span class="metric-value" id="assetId" style="font-size:10px;color:#525252;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">—</span>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Time Series Charts -->
+    <div class="charts-grid">
+      <div class="chart-card">
+        <div class="chart-header">
+          <div class="card-title" style="margin-bottom:0;">CPU & RAM Usage</div>
+          <span class="data-points" id="cpuRamPoints"></span>
+        </div>
+        <div class="chart-container"><canvas id="cpuRamChart"></canvas></div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-header">
+          <div class="card-title" style="margin-bottom:0;">GPU Usage & Temperature</div>
+          <span class="data-points" id="gpuPoints"></span>
+        </div>
+        <div class="chart-container"><canvas id="gpuChart"></canvas></div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-header">
+          <div class="card-title" style="margin-bottom:0;">Network Latency</div>
+          <span class="data-points" id="netPoints"></span>
+        </div>
+        <div class="chart-container"><canvas id="netChart"></canvas></div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-header">
+          <div class="card-title" style="margin-bottom:0;">VRAM & RAM (GB)</div>
+          <span class="data-points" id="memPoints"></span>
+        </div>
+        <div class="chart-container"><canvas id="memChart"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Asset Preview (inside the grid with other cards) -->
+
+    <!-- Commands + Rate (same grid as charts) -->
+    <div class="charts-grid">
+      <div class="chart-card" style="margin-bottom:0;">
+        <div class="chart-header">
+          <div class="card-title" style="margin-bottom:0;">Live Commands</div>
+          <span style="text-transform:none;letter-spacing:0;font-variant-numeric:tabular-nums;font-size:12px;color:#a3a3a3;" id="cmdRate">0 cmd/s</span>
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:12px;font-variant-numeric:tabular-nums;">
+          <span style="font-size:12px;color:#a3a3a3;background:#1a1a1a;padding:4px 10px;border-radius:4px;"><span style="font-weight:700;color:#fafafa;" id="cmdTotal">0</span> total</span>
+          <span style="font-size:12px;color:#a3a3a3;background:#1a1a1a;padding:4px 10px;border-radius:4px;"><span style="font-weight:700;color:#3b82f6;" id="cmdUnique">0</span> unique</span>
+          <span style="font-size:12px;color:#a3a3a3;background:#1a1a1a;padding:4px 10px;border-radius:4px;"><span style="font-weight:700;color:#f59e0b;" id="cmdPeak">0</span> peak/s</span>
+        </div>
+        <div class="log-container" id="cmdLogContainer" style="max-height:180px;"></div>
+      </div>
+
+      <div class="chart-card" style="margin-bottom:0;">
+        <div class="card-title">Command Breakdown</div>
+        <div id="cmdBreakdown" style="max-height:260px;overflow-y:auto;"></div>
+      </div>
+
+      <div class="chart-card" style="margin-bottom:0;">
+        <div class="chart-header">
+          <div class="card-title" style="margin-bottom:0;">Command Rate</div>
+          <span class="data-points" id="cmdRatePoints"></span>
+        </div>
+        <div class="chart-container"><canvas id="cmdRateChart"></canvas></div>
+      </div>
+
+      <div class="chart-card" style="margin-bottom:0;">
+        <div class="card-title">Raw Telemetry Messages</div>
+        <div class="log-container" id="logContainer" style="max-height:200px;"></div>
+      </div>
+    </div>
+
+    <!-- Data Throughput -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px;">
+      <div class="card">
+        <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">
+          <span>📊 Data Throughput</span>
+          <span style="text-transform:none;letter-spacing:0;font-variant-numeric:tabular-nums;font-size:12px;color:#a3a3a3;" id="tpDuration">0s</span>
+        </div>
+
+        <div style="display:flex;gap:12px;margin-bottom:12px;">
+          <div style="flex:1;text-align:center;padding:10px;background:#1a1a1a;border-radius:6px;">
+            <div style="font-size:20px;font-weight:700;color:#fafafa;font-variant-numeric:tabular-nums;" id="tpTotal">0 B</div>
+            <div style="font-size:11px;color:#525252;margin-top:2px;">Total Data</div>
+          </div>
+          <div style="flex:1;text-align:center;padding:10px;background:#1a1a1a;border-radius:6px;">
+            <div style="font-size:20px;font-weight:700;color:#3b82f6;font-variant-numeric:tabular-nums;" id="tpMessages">0</div>
+            <div style="font-size:11px;color:#525252;margin-top:2px;">Messages</div>
+          </div>
+          <div style="flex:1;text-align:center;padding:10px;background:#1a1a1a;border-radius:6px;">
+            <div style="font-size:20px;font-weight:700;color:#22c55e;font-variant-numeric:tabular-nums;" id="tpAvgRate">0 B/s</div>
+            <div style="font-size:11px;color:#525252;margin-top:2px;">Avg Rate</div>
+          </div>
+          <div style="flex:1;text-align:center;padding:10px;background:#1a1a1a;border-radius:6px;">
+            <div style="font-size:20px;font-weight:700;color:#f59e0b;font-variant-numeric:tabular-nums;" id="tpPeakRate">0 B/s</div>
+            <div style="font-size:11px;color:#525252;margin-top:2px;">Peak Rate</div>
+          </div>
+        </div>
+
+        <div class="metric-row">
+          <span class="metric-label">Avg Message Size</span>
+          <span class="metric-value" id="tpAvgMsg">—</span>
+        </div>
+
+        <div style="border-top:1px solid #262626;margin:14px 0;"></div>
+        <div class="card-title" style="margin-bottom:12px;">By Topic Type</div>
+        <div id="tpBreakdown"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">💰 Cost Projection (1 Wall)</div>
+        <p style="font-size:11px;color:#525252;margin-bottom:12px;">Extrapolated from session data</p>
+
+        <div style="display:flex;gap:12px;margin-bottom:16px;">
+          <div style="flex:1;text-align:center;padding:12px;background:#1a1a1a;border-radius:6px;">
+            <div style="font-size:18px;font-weight:700;color:#fafafa;font-variant-numeric:tabular-nums;" id="tpMonthly">—</div>
+            <div style="font-size:11px;color:#525252;margin-top:2px;">/ month</div>
+          </div>
+          <div style="flex:1;text-align:center;padding:12px;background:#1a1a1a;border-radius:6px;">
+            <div style="font-size:18px;font-weight:700;color:#a3a3a3;font-variant-numeric:tabular-nums;" id="tpMsgsMonth">—</div>
+            <div style="font-size:11px;color:#525252;margin-top:2px;">msgs / month</div>
+          </div>
+        </div>
+
+        <div class="metric-row">
+          <span class="metric-label">Hourly</span>
+          <span class="metric-value" id="tpHourly">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Daily</span>
+          <span class="metric-value" id="tpDaily">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Per Wall / Month</span>
+          <span class="metric-value" id="tpPerWall">—</span>
+        </div>
+
+        <div style="border-top:1px solid #262626;margin:14px 0;"></div>
+        <div class="card-title" style="margin-bottom:8px;">Fleet Estimates</div>
+        <p style="font-size:11px;color:#525252;margin-bottom:10px;">Multiply per-wall by number of walls</p>
+        <div class="metric-row">
+          <span class="metric-label">10 Walls</span>
+          <span class="metric-value" id="tpFleet10">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">50 Walls</span>
+          <span class="metric-value" id="tpFleet50">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">100 Walls</span>
+          <span class="metric-value" id="tpFleet100">—</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="emptyState" class="empty-state">
+    <h2>📡</h2>
+    <p>Enter a topic and click Connect to start monitoring</p>
+  </div>
+
+  <script>
+    let client = null;
+    let messageCount = 0;
+
+    // Chart instances
+    let cpuRamChart, gpuChart, netChart, memChart, cmdRateChart;
+
+    // Command tracking
+    let cmdTotal = 0;
+    let cmdPeakRate = 0;
+    const cmdCounts = {};        // address → count
+    let cmdSecondBucket = 0;     // commands in current second
+    let cmdLastSecond = Math.floor(Date.now() / 1000);
+
+    // ── Data throughput tracking ──
+    let totalBytes = 0;
+    let totalMessages = 0;
+    const topicBytes = { telemetry: 0, commands: 0, config: 0, health: 0, other: 0 };
+    const topicMsgs = { telemetry: 0, commands: 0, config: 0, health: 0, other: 0 };
+    let byteSecondBucket = 0;
+    let byteLastSecond = Math.floor(Date.now() / 1000);
+    let peakBytesPerSec = 0;
+    let sessionStartTime = null;
+
+    const CMD_COLORS = {
+      // ── Media Control (greens) ──
+      '/VuOne/playAsset': '#22c55e',
+      '/VuOne/selectAsset': '#16a34a',
+      '/VuOne/playScene': '#4ade80',
+      '/VuOne/setOverlayAsset': '#86efac',
+      '/VuOne/setSplashImage': '#bbf7d0',
+      '/VuOne/setScreensaver': '#a7f3d0',
+
+      // ── Playback (purples) ──
+      '/VuOne/play': '#a855f7',
+      '/VuOne/pause': '#9333ea',
+      '/VuOne/playAll': '#c084fc',
+      '/VuOne/pauseAll': '#7c3aed',
+      '/VuOne/stopAllPlayback': '#6d28d9',
+      '/VuOne/playbackPosition': '#d8b4fe',
+      '/VuOne/requestPlaybackPosition': '#e9d5ff',
+      '/VuOne/setAllPlaybackPos': '#ddd6fe',
+      '/VuOne/setLoop': '#8b5cf6',
+      '/VuOne/inPoint': '#c4b5fd',
+      '/VuOne/outPoint': '#a78bfa',
+
+      // ── Audio (violet-pink) ──
+      '/VuOne/masterVolume': '#d946ef',
+      '/VuOne/volume': '#e879f9',
+      '/VuOne/videoSpeed': '#f0abfc',
+
+      // ── Transform (blues) ──
+      '/VuOne/position': '#3b82f6',
+      '/VuOne/scale': '#2563eb',
+      '/VuOne/rotation': '#60a5fa',
+      '/VuOne/cameraRigPosition': '#93c5fd',
+      '/VuOne/focalLength': '#1d4ed8',
+      '/VuOne/panoRotation': '#bfdbfe',
+      '/VuOne/verticalRotation': '#1e40af',
+
+      // ── Visual Attributes (ambers/oranges) ──
+      '/VuOne/opacity': '#f59e0b',
+      '/VuOne/exposure': '#d97706',
+      '/VuOne/saturation': '#fbbf24',
+      '/VuOne/contrast': '#f97316',
+      '/VuOne/temperature': '#fb923c',
+      '/VuOne/blur': '#fcd34d',
+      '/VuOne/tint': '#fdba74',
+      '/VuOne/depthExtrusion': '#ea580c',
+      '/VuOne/timeOfDay': '#c2410c',
+      '/VuOne/cornerRadius': '#fed7aa',
+      '/VuOne/blacks': '#92400e',
+      '/VuOne/whites': '#fef3c7',
+      '/VuOne/shadows': '#b45309',
+      '/VuOne/highlights': '#fde68a',
+      '/VuOne/panoExposure': '#78350f',
+
+      // ── Crop & Flip (slate-blue) ──
+      '/VuOne/cropTop': '#64748b',
+      '/VuOne/cropBottom': '#475569',
+      '/VuOne/cropLeft': '#94a3b8',
+      '/VuOne/cropRight': '#cbd5e1',
+      '/VuOne/flipVertical': '#334155',
+      '/VuOne/flipHorizontal': '#1e293b',
+      '/VuOne/blackIsTransparency': '#e2e8f0',
+      '/VuOne/isLocked': '#f1f5f9',
+
+      // ── Display (teals) ──
+      '/VuOne/targetDisplay': '#14b8a6',
+      '/VuOne/setFloor': '#0d9488',
+      '/VuOne/setCeiling': '#2dd4bf',
+      '/VuOne/displaySources': '#5eead4',
+      '/VuOne/displayURL': '#99f6e4',
+      '/VuOne/updateAssetOrder': '#0f766e',
+
+      // ── Camera/PTZ (cyans) ──
+      '/VuOne/connectToCamera': '#06b6d4',
+      '/VuOne/disconnectFromCamera': '#0891b2',
+      '/VuOne/setCameraProperty': '#22d3ee',
+      '/VuOne/setCameraRecord': '#67e8f9',
+      '/VuOne/updateCameraIPs': '#a5f3fc',
+      '/VuOne/ptzValues': '#0e7490',
+
+      // ── Lighting/DMX (reds) ──
+      '/VuOne/sendDMXCommand': '#ef4444',
+      '/VuOne/setPixelMappingEnabled': '#dc2626',
+      '/VuOne/ledBrightness': '#f87171',
+      '/VuOne/toggleLedFade': '#fca5a5',
+
+      // ── Playlist (lime) ──
+      '/VuOne/startPlaylist': '#84cc16',
+      '/VuOne/stopPlaylist': '#65a30d',
+      '/VuOne/playlistLoop': '#a3e635',
+      '/VuOne/playlistDefaultDuration': '#bef264',
+
+      // ── Music (sky) ──
+      '/VuOne/playMusic': '#0ea5e9',
+      '/VuOne/pauseMusic': '#0284c7',
+      '/VuOne/resumeMusic': '#38bdf8',
+      '/VuOne/stopMusic': '#0369a1',
+      '/VuOne/setMusicVolume': '#7dd3fc',
+      '/VuOne/prevMusicTrack': '#bae6fd',
+      '/VuOne/nextMusicTrack': '#e0f2fe',
+
+      // ── Cursor (rose) ──
+      '/VuOne/cursor': '#f43f5e',
+      '/VuOne/toggleCursor': '#fb7185',
+
+      // ── Web (indigo) ──
+      '/VuOne/webKeyPress': '#6366f1',
+      '/VuOne/webClick': '#818cf8',
+      '/VuOne/reloadWebpage': '#a5b4fc',
+
+      // ── System/Config (pinks) ──
+      '/VuOne/updateUISettings': '#ec4899',
+      '/VuOne/resetWallSettings': '#db2777',
+      '/VuOne/setTransition': '#f472b6',
+      '/VuOne/setTimeoutMinutes': '#f9a8d4',
+      '/VuOne/requestUpdate': '#be185d',
+      '/VuOne/checkForUpdates': '#9d174d',
+      '/VuOne/sendServerLogs': '#fbcfe8',
+      '/VuOne/adminSetup': '#831843',
+      '/VuOne/refreshNDI': '#fce7f3',
+      '/VuOne/downloadDepthMap': '#701a75',
+      '/VuOne/downloadMultipleAssets': '#86198f',
+      '/VuOne/playerMode': '#a21caf',
+      '/VuOne/trackingMode': '#c026d3',
+      '/VuOne/sensors': '#d946ef',
+      '/VuOne/OSC_sendToIP': '#e879f9',
+      '/VuOne/userData': '#06b6d4',
+      '/VuOne/connectioninfo': '#ec4899',
+      '/VuOne/disconnect': '#be123c',
+      '/VuOne/sleepMode': '#fda4af',
+
+      // ── Screenshare (emerald) ──
+      '/VuOne/screenshareReady': '#10b981',
+      '/VuOne/invalidScreensharePin': '#059669',
+      '/VuOne/screensharePin': '#34d399',
+
+      // ── File browsing (stone) ──
+      '/VuOne/requestLocalFolders': '#78716c',
+      '/VuOne/requestLocalFiles': '#a8a29e',
+      '/VuOne/requestSubfolders': '#d6d3d1',
+      '/VuOne/requestFileThumbnail': '#57534e',
+
+      // ── NDI/Misc (zinc) ──
+      '/VuOne/ndiInput': '#a1a1aa',
+      '/VuOne/cursorEnabled': '#71717a',
+      '/VuOne/cursorGrabEnabled': '#52525b',
+    };
+
+    // Chart.js defaults for dark theme
+    Chart.defaults.color = '#737373';
+    Chart.defaults.borderColor = '#262626';
+    Chart.defaults.font.size = 11;
+    Chart.defaults.font.family = '-apple-system, BlinkMacSystemFont, system-ui, sans-serif';
+
+    const chartScaleDefaults = {
+      grid: { color: '#1a1a1a' },
+      ticks: { maxTicksLimit: 8 },
+    };
+
+    let durationMs = 30 * 1000; // default 30 sec window
+
+    function getTimeAxis() {
+      return {
+        type: 'time',
+        time: { tooltipFormat: 'HH:mm:ss', displayFormats: { minute: 'HH:mm', second: 'HH:mm:ss', hour: 'HH:mm' } },
+        ...chartScaleDefaults,
+        min: Date.now() - durationMs,
+        max: Date.now(),
+      };
+    }
+
+    function makeDataset(label, color, borderDash) {
+      return {
+        label,
+        data: [],
+        borderColor: color,
+        backgroundColor: color + '18',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        pointHitRadius: 8,
+        tension: 0.3,
+        fill: true,
+        borderDash: borderDash || [],
+      };
+    }
+
+    let scrollInterval = null;
+
+    function initCharts() {
+      const commonOptions = (yLabel, suggestedMax) => ({
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { position: 'top', labels: { boxWidth: 12, padding: 12 } },
+          tooltip: { backgroundColor: '#262626', titleColor: '#e5e5e5', bodyColor: '#a3a3a3', borderColor: '#333', borderWidth: 1 },
+        },
+        scales: {
+          x: getTimeAxis(),
+          y: { ...chartScaleDefaults, beginAtZero: true, suggestedMax, title: { display: true, text: yLabel, color: '#525252' } },
+        },
+      });
+
+      cpuRamChart = new Chart(document.getElementById('cpuRamChart'), {
+        type: 'line',
+        data: { datasets: [makeDataset('CPU %', '#3b82f6'), makeDataset('RAM %', '#a855f7')] },
+        options: commonOptions('%', 100),
+      });
+
+      gpuChart = new Chart(document.getElementById('gpuChart'), {
+        type: 'line',
+        data: { datasets: [makeDataset('GPU %', '#22c55e'), makeDataset('Temp °C', '#f59e0b', [4, 2])] },
+        options: {
+          ...commonOptions('', 100),
+          scales: {
+            x: getTimeAxis(),
+            y: { ...chartScaleDefaults, beginAtZero: true, suggestedMax: 100, position: 'left', title: { display: true, text: 'Usage %', color: '#525252' } },
+            y1: { ...chartScaleDefaults, beginAtZero: true, suggestedMax: 90, position: 'right', title: { display: true, text: '°C', color: '#525252' }, grid: { drawOnChartArea: false } },
+          },
+        },
+      });
+      gpuChart.data.datasets[1].yAxisID = 'y1';
+
+      netChart = new Chart(document.getElementById('netChart'), {
+        type: 'line',
+        data: { datasets: [makeDataset('Latency', '#06b6d4')] },
+        options: commonOptions('ms', 100),
+      });
+
+      memChart = new Chart(document.getElementById('memChart'), {
+        type: 'line',
+        data: { datasets: [makeDataset('RAM Used', '#a855f7'), makeDataset('VRAM Used', '#f43f5e')] },
+        options: commonOptions('GB', 32),
+      });
+
+      cmdRateChart = new Chart(document.getElementById('cmdRateChart'), {
+        type: 'line',
+        data: { datasets: [makeDataset('cmd/s', '#ec4899')] },
+        options: commonOptions('cmd/s', 60),
+      });
+
+      // Start realtime scroll via requestAnimationFrame for smooth 60fps
+      scrollCharts();
+    }
+
+    function scrollCharts() {
+      const now = Date.now();
+      [cpuRamChart, gpuChart, netChart, memChart, cmdRateChart].forEach(chart => {
+        chart.options.scales.x.min = now - durationMs;
+        chart.options.scales.x.max = now;
+        chart.update('none');
+      });
+      requestAnimationFrame(scrollCharts);
+    }
+
+    function pushHistory(d) {
+      const s = d.system || {};
+      const n = d.network || {};
+      const now = Date.now();
+
+      // Push into datasets
+      cpuRamChart.data.datasets[0].data.push({ x: now, y: s.cpuUsage });
+      cpuRamChart.data.datasets[1].data.push({ x: now, y: s.ramPercent });
+
+      gpuChart.data.datasets[0].data.push({ x: now, y: s.gpuUsage });
+      gpuChart.data.datasets[1].data.push({ x: now, y: s.gpuTemp });
+
+      netChart.data.datasets[0].data.push({ x: now, y: n.latencyMs });
+
+      memChart.data.datasets[0].data.push({ x: now, y: s.ramUsedMB ? +(s.ramUsedMB / 1024).toFixed(2) : null });
+      memChart.data.datasets[1].data.push({ x: now, y: s.gpuMemUsedMB ? +(s.gpuMemUsedMB / 1024).toFixed(2) : null });
+
+      // Trim old data (older than 3 hours)
+      const cutoff = now - 3 * 60 * 60 * 1000;
+      [cpuRamChart, gpuChart, netChart, memChart, cmdRateChart].forEach(chart => {
+        chart.data.datasets.forEach(ds => {
+          while (ds.data.length > 0 && ds.data[0].x < cutoff) ds.data.shift();
+        });
+      });
+
+      // Update counts
+      const pts = cpuRamChart.data.datasets[0].data.length;
+      document.getElementById('dataPoints').textContent = pts + ' samples';
+      document.getElementById('cpuRamPoints').textContent = pts + ' pts';
+      document.getElementById('gpuPoints').textContent = pts + ' pts';
+      document.getElementById('netPoints').textContent = pts + ' pts';
+      document.getElementById('memPoints').textContent = pts + ' pts';
+    }
+
+    function updateChartRange() {
+      const mins = parseFloat(document.getElementById('historyRange').value);
+      durationMs = mins === 0 ? 3 * 60 * 60 * 1000 : mins * 60 * 1000;
+      scrollCharts();
+    }
+
+    // ---- Connection ----
+
+    function toggleConnection() {
+      if (client && client.connected) {
+        client.end();
+        return;
+      }
+      connect();
+    }
+
+    function connect() {
+      const wallId = document.getElementById('wallIdInput').value.trim();
+      if (!wallId) return;
+
+      setStatus('connecting');
+
+      client = mqtt.connect('wss://mqtt.vu.studio/mqtt', {
+        username: 'dev',
+        password: 'testing',
+        clientId: 'telemetry-monitor-' + Math.random().toString(36).slice(2, 8),
+        reconnectPeriod: 5000,
+      });
+
+      const wildcardTopic = 'vu/' + wallId + '/#';
+
+      client.on('connect', () => {
+        setStatus('connected');
+        client.subscribe(wildcardTopic);
+        document.getElementById('dashboard').style.display = 'block';
+        document.getElementById('emptyState').style.display = 'none';
+        if (!cpuRamChart) initCharts();
+        addLog('Subscribed to ' + wildcardTopic + ' (wildcard)');
+      });
+
+      client.on('message', (t, payload) => {
+        // ── Track bytes for throughput ──
+        if (!sessionStartTime) sessionStartTime = Date.now();
+        const payloadBytes = payload.byteLength || payload.length || 0;
+        const topicOverhead = t.length; // topic string bytes
+        const msgBytes = payloadBytes + topicOverhead + 5; // +5 for MQTT header overhead
+        totalBytes += msgBytes;
+        totalMessages++;
+
+        // Classify by topic type
+        let topicType = 'other';
+        if (t.endsWith('/commands')) topicType = 'commands';
+        else if (t.endsWith('/config')) topicType = 'config';
+        else if (t.endsWith('/telemetry/health')) topicType = 'health';
+        else if (t.endsWith('/telemetry')) topicType = 'telemetry';
+        topicBytes[topicType] += msgBytes;
+        topicMsgs[topicType] += 1;
+
+        // Per-second byte rate
+        const nowByteSec = Math.floor(Date.now() / 1000);
+        if (nowByteSec === byteLastSecond) {
+          byteSecondBucket += msgBytes;
+        } else {
+          if (byteSecondBucket > peakBytesPerSec) peakBytesPerSec = byteSecondBucket;
+          byteSecondBucket = msgBytes;
+          byteLastSecond = nowByteSec;
+        }
+
+        updateThroughputUI();
+
+        try {
+          const data = JSON.parse(payload.toString());
+          if (t.endsWith('/commands')) {
+            handleCommand(data);
+          } else if (t.endsWith('/config')) {
+            handleConfig(data);
+          } else if (t.endsWith('/telemetry/health')) {
+            handleHealth(data);
+          } else if (t.endsWith('/telemetry')) {
+            messageCount++;
+            updateDashboard(data);
+            pushHistory(data);
+            addLog('Telemetry #' + messageCount + ' from ' + (data.wallId || 'unknown'));
+          } else {
+            addLog('Unknown topic ' + t + ': ' + payload.toString().slice(0, 120));
+          }
+        } catch (e) {
+          addLog('Non-JSON on ' + t + ': ' + payload.toString().slice(0, 100));
+        }
+      });
+
+      client.on('error', (err) => {
+        setStatus('error');
+        addLog('Error: ' + err.message);
+      });
+
+      client.on('close', () => {
+        setStatus('disconnected');
+      });
+    }
+
+    function handleCommand(data) {
+      const addr = data.address || 'unknown';
+      const args = data.args || [];
+
+      // Asset preview — playAsset / selectAsset may carry asset JSON with downloadLink
+      if (addr === '/VuOne/playAsset' || addr === '/VuOne/selectAsset') {
+        handleAssetPreview(addr, args);
+      }
+
+      // Count
+      cmdTotal++;
+      cmdCounts[addr] = (cmdCounts[addr] || 0) + 1;
+
+      // Rate tracking — bucket per second
+      const nowSec = Math.floor(Date.now() / 1000);
+      if (nowSec === cmdLastSecond) {
+        cmdSecondBucket++;
+      } else {
+        // Flush previous second to chart
+        if (cmdRateChart) {
+          cmdRateChart.data.datasets[0].data.push({ x: cmdLastSecond * 1000, y: cmdSecondBucket });
+        }
+        if (cmdSecondBucket > cmdPeakRate) {
+          cmdPeakRate = cmdSecondBucket;
+          document.getElementById('cmdPeak').textContent = cmdPeakRate;
+        }
+        cmdSecondBucket = 1;
+        cmdLastSecond = nowSec;
+      }
+
+      // Update UI counters
+      document.getElementById('cmdTotal').textContent = cmdTotal;
+      document.getElementById('cmdUnique').textContent = Object.keys(cmdCounts).length;
+      document.getElementById('cmdRate').textContent = cmdSecondBucket + ' cmd/s';
+      document.getElementById('cmdRatePoints').textContent = (cmdRateChart ? cmdRateChart.data.datasets[0].data.length : 0) + ' pts';
+
+      // Add to command log (throttle position to avoid flood)
+      const argsStr = args.map(a => typeof a === 'object' ? JSON.stringify(a).slice(0, 80) : a).join(', ');
+      const shortAddr = addr.replace('/VuOne/', '');
+      const color = CMD_COLORS[addr] || '#737373';
+
+      // Throttle position logs (only show every 10th)
+      if (addr === '/VuOne/position' && cmdCounts[addr] % 10 !== 0) return;
+
+      const container = document.getElementById('cmdLogContainer');
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      entry.innerHTML = '<span class="log-time">' + new Date().toLocaleTimeString() + '</span> ' +
+        '<span style="color:' + color + ';font-weight:600;">' + shortAddr + '</span> ' +
+        '<span style="color:#a3a3a3;">[' + argsStr + ']</span>';
+      container.insertBefore(entry, container.firstChild);
+      if (container.children.length > 80) container.removeChild(container.lastChild);
+
+      // Update breakdown
+      updateCmdBreakdown();
+    }
+
+    function updateCmdBreakdown() {
+      const container = document.getElementById('cmdBreakdown');
+      const sorted = Object.entries(cmdCounts).sort((a, b) => b[1] - a[1]);
+      let html = '';
+      for (const [addr, count] of sorted) {
+        const shortAddr = addr.replace('/VuOne/', '');
+        const color = CMD_COLORS[addr] || '#737373';
+        const pct = cmdTotal > 0 ? (count / cmdTotal * 100).toFixed(1) : 0;
+        html += '<div class="metric-row">' +
+          '<span class="metric-label"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + color + ';margin-right:6px;"></span>' + shortAddr + '</span>' +
+          '<span class="metric-value">' + count.toLocaleString() + ' <span style="color:#525252;font-weight:400;">(' + pct + '%)</span></span>' +
+          '</div>' +
+          '<div class="bar-container"><div class="bar-fill" style="width:' + pct + '%;background:' + color + ';"></div></div>';
+      }
+      container.innerHTML = html;
+    }
+
+    // ── Throughput helpers ──
+
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 B';
+      const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(1024));
+      return (bytes / Math.pow(1024, i)).toFixed(i > 0 ? 2 : 0) + ' ' + units[i];
+    }
+
+    function formatDuration(ms) {
+      const s = Math.floor(ms / 1000);
+      if (s < 60) return s + 's';
+      if (s < 3600) return Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+      const h = Math.floor(s / 3600);
+      return h + 'h ' + Math.floor((s % 3600) / 60) + 'm';
+    }
+
+    function updateThroughputUI() {
+      const el = (id) => document.getElementById(id);
+      if (!el('tpTotal')) return;
+
+      const elapsed = sessionStartTime ? (Date.now() - sessionStartTime) : 0;
+      const elapsedSec = elapsed / 1000 || 1;
+
+      // Summary stats
+      el('tpTotal').textContent = formatBytes(totalBytes);
+      el('tpMessages').textContent = totalMessages.toLocaleString();
+      el('tpAvgRate').textContent = formatBytes(totalBytes / elapsedSec) + '/s';
+      el('tpPeakRate').textContent = formatBytes(peakBytesPerSec) + '/s';
+      el('tpDuration').textContent = formatDuration(elapsed);
+      el('tpAvgMsg').textContent = totalMessages > 0 ? formatBytes(totalBytes / totalMessages) : '—';
+
+      // Per-topic breakdown
+      const types = ['commands', 'telemetry', 'config', 'health', 'other'];
+      const colors = { commands: '#ef4444', telemetry: '#3b82f6', config: '#f59e0b', health: '#22c55e', other: '#737373' };
+      let html = '';
+      for (const tp of types) {
+        if (topicMsgs[tp] === 0) continue;
+        const pct = totalBytes > 0 ? (topicBytes[tp] / totalBytes * 100).toFixed(1) : 0;
+        html += '<div class="metric-row">' +
+          '<span class="metric-label"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + colors[tp] + ';margin-right:6px;"></span>' + tp + '</span>' +
+          '<span class="metric-value">' + formatBytes(topicBytes[tp]) + ' <span style="color:#525252;font-weight:400;">(' + topicMsgs[tp].toLocaleString() + ' msgs, ' + pct + '%)</span></span></div>' +
+          '<div class="bar-container"><div class="bar-fill" style="width:' + pct + '%;background:' + colors[tp] + ';"></div></div>';
+      }
+      el('tpBreakdown').innerHTML = html;
+
+      // Cost projections
+      const bytesPerHour = totalBytes / elapsedSec * 3600;
+      const bytesPerDay = bytesPerHour * 24;
+      const bytesPerMonth = bytesPerDay * 30;
+      const msgsPerHour = totalMessages / elapsedSec * 3600;
+      const msgsPerMonth = msgsPerHour * 24 * 30;
+
+      el('tpHourly').textContent = formatBytes(bytesPerHour);
+      el('tpDaily').textContent = formatBytes(bytesPerDay);
+      el('tpMonthly').textContent = formatBytes(bytesPerMonth);
+      el('tpMsgsMonth').textContent = (msgsPerMonth / 1e6).toFixed(2) + 'M msgs';
+
+      // Per-wall monthly (this is 1 wall, so same as above)
+      el('tpPerWall').textContent = formatBytes(bytesPerMonth) + ' / wall';
+
+      // Fleet estimates
+      el('tpFleet10').textContent = formatBytes(bytesPerMonth * 10) + ' / mo';
+      el('tpFleet50').textContent = formatBytes(bytesPerMonth * 50) + ' / mo';
+      el('tpFleet100').textContent = formatBytes(bytesPerMonth * 100) + ' / mo';
+    }
+
+    // ---- Asset Preview ----
+
+    function handleAssetPreview(addr, args) {
+      // playAsset args: [displayIndex, bool, jsonString] or [displayIndex, bool, object]
+      // selectAsset args: [assetId] or [jsonString]
+      let assetData = null;
+
+      for (const arg of args) {
+        if (typeof arg === 'object' && arg !== null && (arg.downloadLink || arg.id)) {
+          assetData = arg;
+          break;
+        }
+        if (typeof arg === 'string' && arg.startsWith('{')) {
+          try {
+            assetData = JSON.parse(arg);
+            break;
+          } catch (e) {
+            // Truncated JSON (>500 chars from watchdog) — extract fields with regex
+            assetData = {};
+            const idMatch = arg.match(/"id"\s*:\s*"([^"]+)"/);
+            const titleMatch = arg.match(/"title"\s*:\s*"([^"]+)"/);
+            const typeMatch = arg.match(/"type"\s*:\s*"([^"]+)"/);
+            const providerMatch = arg.match(/"provider"\s*:\s*"([^"]+)"/);
+            const filenameMatch = arg.match(/"filenameDownload"\s*:\s*"([^"]+)"/);
+            const linkMatch = arg.match(/"downloadLink"\s*:\s*"([^"]*?)(?:"|$)/);
+            if (idMatch) assetData.id = idMatch[1];
+            if (titleMatch) assetData.title = titleMatch[1];
+            if (typeMatch) assetData.type = typeMatch[1];
+            if (providerMatch) assetData.provider = providerMatch[1];
+            if (filenameMatch) assetData.filenameDownload = filenameMatch[1];
+            if (linkMatch) assetData.downloadLink = linkMatch[1];
+            if (Object.keys(assetData).length === 0) assetData = null;
+            break;
+          }
+        }
+      }
+
+      if (!assetData) return;
+
+      const card = document.getElementById('assetPreviewCard');
+      card.style.display = '';
+
+      // Pick the best preview URL based on asset type
+      const type = (assetData.type || assetData.originalType || '').toLowerCase();
+      const isVideo = type.startsWith('video/');
+      const isAudio = type.startsWith('audio/');
+
+      // For images: use downloadLink or src directly
+      // For video/audio: use thumbnail (can't render mp4/audio in <img>)
+      let previewUrl = '';
+      if (isVideo || isAudio) {
+        previewUrl = assetData.thumbnailLg || assetData.thumbnailMd || assetData.thumbnailSm
+          || assetData.thumbAspectLg || assetData.thumbAspectMd || assetData.thumbAspectSm || '';
+      }
+      if (!previewUrl) {
+        previewUrl = assetData.downloadLink || assetData.src || assetData.originalSrc
+          || assetData.thumbnailLg || assetData.thumbnailMd || '';
+      }
+
+      const img = document.getElementById('assetPreviewImg');
+      const video = document.getElementById('assetPreviewVideo');
+      const videoSrc = assetData.downloadLink || assetData.src || '';
+
+      if (isVideo && videoSrc && !videoSrc.endsWith('...')) {
+        // Play video muted
+        img.style.display = 'none';
+        video.src = videoSrc;
+        video.style.display = 'block';
+        video.onerror = () => {
+          video.style.display = 'none';
+          // Fallback to thumbnail
+          if (previewUrl) { img.src = previewUrl; img.style.display = ''; }
+          addLog('Video failed to load, showing thumbnail');
+        };
+      } else if (previewUrl && !previewUrl.endsWith('...')) {
+        // Show image
+        video.style.display = 'none';
+        video.src = '';
+        img.src = previewUrl;
+        img.alt = assetData.title || 'Asset preview';
+        img.style.display = '';
+        img.onerror = () => {
+          img.style.display = 'none';
+          addLog('Asset preview failed to load');
+        };
+      } else {
+        img.style.display = 'none';
+        video.style.display = 'none';
+        video.src = '';
+      }
+
+      // Metadata
+      const title = assetData.title || assetData.filenameDownload || 'Unknown';
+      const filename = assetData.filenameDownload || '';
+      const ext = filename.split('.').pop() || '?';
+      const provider = assetData.provider || '—';
+      const id = assetData.id || '—';
+
+      setText('assetTitle', title);
+      document.getElementById('assetTitle').title = filename;
+      const typeLabel = type || ext.toUpperCase();
+      const typeEl = document.getElementById('assetType');
+      typeEl.textContent = typeLabel;
+      typeEl.className = 'metric-value';
+      if (isVideo) { typeEl.style.color = '#3b82f6'; }
+      else if (isAudio) { typeEl.style.color = '#a855f7'; }
+      else { typeEl.style.color = '#22c55e'; }
+      setText('assetProvider', provider);
+      setText('assetId', id);
+      setText('assetTime', new Date().toLocaleTimeString());
+      document.getElementById('assetMeta').textContent = addr.replace('/VuOne/', '');
+
+      addLog('Asset loaded: ' + title + ' (' + ext + ')');
+    }
+
+    // ---- Config & Health handlers ----
+
+    let lastConfigJson = '';
+
+    function handleConfig(data) {
+      // Dedupe — config is retained + published every 60s
+      const json = JSON.stringify(data);
+      const changed = json !== lastConfigJson;
+      lastConfigJson = json;
+
+      document.getElementById('configSection').style.display = '';
+      if (changed) addLog('Config received');
+
+      // Exact paths from watchdog payload: { appConfig: {...}, systemConfig: {...} }
+      const appCfg = data.appConfig || {};
+      const sysCfg = data.systemConfig || {};
+      const uiSettings = sysCfg.uiSettings || {};
+
+      // Wall IP (systemConfig.wallIP)
+      setText('cfgWallIp', sysCfg.wallIP || '—');
+
+      // Processor mode (systemConfig.processorMode)
+      setText('cfgProcessor', sysCfg.processorMode || '—');
+
+      // Displays (systemConfig.displays[])
+      const displays = sysCfg.displays || [];
+      setText('cfgDisplays', displays.length + ' display' + (displays.length !== 1 ? 's' : ''));
+
+      // Active assets — each display has its own displayedAssets[]
+      let totalAssets = 0;
+      let allAssets = [];
+      displays.forEach(disp => {
+        const assets = disp.displayedAssets || [];
+        totalAssets += assets.length;
+        assets.forEach(a => allAssets.push({ ...a, displayName: disp.nickname || disp.hardwareName }));
+      });
+      setText('cfgAssets', totalAssets > 0 ? totalAssets + ' active' : 'None');
+
+      // Show first asset with a downloadLink in the preview card
+      const previewAsset = allAssets.find(a => a.downloadLink);
+      if (previewAsset) {
+        handleAssetPreview('config', [previewAsset]);
+      }
+
+      // Connected users — comes from telemetry.network.connectedPeers, not config
+      // Config has appConfig.httpPort which is used for the connected-users endpoint
+      const ports = appCfg.websocketPort ? 'WS:' + appCfg.websocketPort + ' HTTP:' + appCfg.httpPort : '—';
+      setText('cfgConnected', ports);
+
+      // OSC endpoint
+      setText('cfgCameras', sysCfg.oscIp || 'None');
+
+      // Display details with per-display assets
+      const container = document.getElementById('cfgDisplaysList');
+      if (displays.length > 0) {
+        const TYPE_COLORS = {
+          'image/png': '#22c55e', 'image/jpeg': '#22c55e', 'image/webp': '#22c55e', 'image/gif': '#22c55e',
+          'video/mp4': '#3b82f6', 'video/webm': '#3b82f6',
+          'audio/mpeg': '#a855f7', 'audio/wav': '#a855f7',
+          'application/pdf': '#f59e0b',
+        };
+        let html = '';
+        displays.forEach((disp, i) => {
+          const name = disp.nickname || disp.hardwareName || ('Display ' + (i + 1));
+          const res = disp.renderWidth && disp.renderHeight ? disp.renderWidth + '×' + disp.renderHeight : '';
+          const mode = disp.displayMode || '';
+          const active = disp.isActivated;
+          const fullscreen = disp.isFullscreen;
+
+          html += '<div style="margin-top:' + (i > 0 ? '8' : '0') + 'px;padding:8px 10px;background:#1a1a1a;border-radius:6px;border-left:3px solid ' + (active ? '#22c55e' : '#525252') + ';">';
+          html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">';
+          html += '<span style="color:#e5e5e5;font-size:12px;font-weight:600;">' + name + '</span>';
+          html += '<span style="font-size:10px;color:#525252;">' + res + (fullscreen ? ' FS' : '') + '</span>';
+          html += '</div>';
+          if (mode) {
+            html += '<div style="font-size:10px;color:#737373;margin-bottom:4px;">Mode: ' + mode + '</div>';
+          }
+
+          const assets = disp.displayedAssets || [];
+          if (assets.length > 0) {
+            assets.forEach(asset => {
+              const title = asset.title || asset.filenameDownload || asset.id || 'Unknown';
+              const type = asset.type || '?';
+              const typeShort = type.split('/').pop();
+              const color = TYPE_COLORS[type] || '#737373';
+              html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;font-size:11px;">' +
+                '<span style="color:#a3a3a3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:70%;" title="' + (asset.filenameDownload || '') + '">' + title + '</span>' +
+                '<span style="color:' + color + ';font-weight:600;font-size:10px;">' + typeShort + '</span>' +
+                '</div>';
+            });
+          } else {
+            html += '<div style="font-size:11px;color:#525252;font-style:italic;">No assets</div>';
+          }
+          html += '</div>';
+        });
+        container.innerHTML = html;
+      } else {
+        container.innerHTML = '';
+      }
+    }
+
+    function handleHealth(data) {
+      const badge = document.getElementById('wallStatus');
+      badge.style.display = 'inline-block';
+
+      if (data.status === 'online') {
+        badge.textContent = '● WALL ONLINE';
+        badge.style.background = '#052e16';
+        badge.style.color = '#22c55e';
+        badge.style.border = '1px solid #166534';
+      } else {
+        badge.textContent = '● WALL OFFLINE';
+        badge.style.background = '#450a0a';
+        badge.style.color = '#ef4444';
+        badge.style.border = '1px solid #991b1b';
+      }
+      addLog('Health: ' + data.status + ' (wall ' + (data.wallId || '?') + ')');
+    }
+
+    function setStatus(state) {
+      const dot = document.getElementById('statusDot');
+      const text = document.getElementById('statusText');
+      const btn = document.getElementById('connectBtn');
+
+      dot.className = 'status-dot';
+      btn.className = '';
+
+      if (state === 'connected') {
+        dot.classList.add('connected');
+        text.textContent = 'Connected';
+        btn.textContent = 'Disconnect';
+        btn.classList.add('active');
+      } else if (state === 'connecting') {
+        text.textContent = 'Connecting...';
+        btn.textContent = 'Connecting...';
+      } else {
+        text.textContent = state === 'error' ? 'Error' : 'Disconnected';
+        btn.textContent = 'Connect';
+      }
+    }
+
+    function updateDashboard(d) {
+      const s = d.system || {};
+      const n = d.network || {};
+      const a = d.app || {};
+
+      setText('cpuModel', shortenCpu(s.cpuModel));
+      setText('cpuUsage', s.cpuUsage + '% (' + s.cpuCores + ' cores)');
+      setBar('cpuBar', s.cpuUsage);
+      setText('ramUsage', formatMB(s.ramUsedMB) + ' / ' + formatMB(s.ramTotalMB) + ' (' + s.ramPercent + '%)');
+      setBar('ramBar', s.ramPercent);
+      setText('uptime', formatUptime(s.uptime));
+
+      setText('gpuName', shortenGpu(s.gpuName));
+      setText('gpuUsage', s.gpuUsage + '%');
+      setBar('gpuBar', s.gpuUsage);
+      setText('gpuMem', formatMB(s.gpuMemUsedMB) + ' / ' + formatMB(s.gpuMemTotalMB));
+      const gpuMemPct = s.gpuMemTotalMB ? Math.round(s.gpuMemUsedMB / s.gpuMemTotalMB * 100) : 0;
+      setBar('gpuMemBar', gpuMemPct);
+      const tempEl = document.getElementById('gpuTemp');
+      tempEl.textContent = s.gpuTemp + '°C';
+      tempEl.className = 'metric-value' + (s.gpuTemp > 80 ? ' danger' : s.gpuTemp > 65 ? ' warn' : ' good');
+
+      setText('diskPercent', s.diskPercent);
+      setBar('diskBar', s.diskPercent);
+      setText('diskUsage', formatGB(s.diskUsedMB) + ' / ' + formatGB(s.diskTotalMB));
+
+      setOnline('netOnline', n.internetOnline);
+      setText('netLatency', n.latencyMs + ' ms');
+      setOnline('netLocal', n.localServerReachable);
+      setText('netPeers', n.connectedPeers);
+
+      setOnline('appVuos', a.vuosProcessRunning);
+      setOnline('appServer', a.serverProcessRunning);
+      setText('appVersion', a.serverVersion || '—');
+      setText('wallId', d.wallId || '—');
+      setText('lastUpdate', new Date(d.timestamp).toLocaleTimeString());
+
+      // Server Health
+      const lock = a.serverLock || {};
+      if (lock.healthy !== undefined) {
+        setOnline('lockHealthy', lock.healthy);
+        setText('lockPid', lock.pid || '—');
+        const hbAge = lock.heartbeatAgeMs;
+        const hbEl = document.getElementById('lockHeartbeatAge');
+        hbEl.textContent = hbAge != null ? hbAge + ' ms' : '—';
+        hbEl.className = 'metric-value' + (hbAge > 5000 ? ' danger' : hbAge > 2000 ? ' warn' : ' good');
+        setText('lockLastHeartbeat', lock.lastHeartbeat ? new Date(lock.lastHeartbeat).toLocaleTimeString() : '—');
+        if (lock.startTime) {
+          const procUptime = Math.floor((d.timestamp - lock.startTime) / 1000);
+          setText('lockUptime', formatUptime(procUptime));
+        }
+      }
+
+      // Error Log
+      const logs = a.logs || {};
+      if (logs.recentErrorCount !== undefined) {
+        const errEl = document.getElementById('errCount');
+        errEl.textContent = logs.recentErrorCount;
+        errEl.className = 'metric-value' + (logs.recentErrorCount > 5 ? ' danger' : logs.recentErrorCount > 0 ? ' warn' : ' good');
+        setText('errTime', logs.lastErrorTime || '—');
+        document.getElementById('errMessage').textContent = logs.lastError || 'No errors';
+        if (!logs.lastError || logs.recentErrorCount === 0) {
+          document.getElementById('errMessage').style.color = '#22c55e';
+        } else {
+          document.getElementById('errMessage').style.color = '#ef4444';
+        }
+      }
+
+    }
+
+    function setBar(id, pct) {
+      const el = document.getElementById(id);
+      el.style.width = pct + '%';
+      el.style.background = pct > 85 ? '#ef4444' : pct > 65 ? '#f59e0b' : '#22c55e';
+    }
+
+    function setText(id, val) { document.getElementById(id).textContent = val; }
+
+    function setOnline(id, val) {
+      const el = document.getElementById(id);
+      el.textContent = val ? 'Online' : 'Offline';
+      el.className = 'metric-value ' + (val ? 'good' : 'danger');
+    }
+
+    function formatMB(mb) { return mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : mb + ' MB'; }
+    function formatGB(mb) { return (mb / 1024).toFixed(0) + ' GB'; }
+
+    function formatUptime(seconds) {
+      const d = Math.floor(seconds / 86400);
+      const h = Math.floor((seconds % 86400) / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      return (d ? d + 'd ' : '') + h + 'h ' + m + 'm';
+    }
+
+    function shortenCpu(name) {
+      if (!name) return '—';
+      return name.replace('Intel(R) Core(TM) ', '').replace('AMD ', '');
+    }
+
+    function shortenGpu(name) {
+      if (!name) return '—';
+      return name.replace('NVIDIA ', '');
+    }
+
+    function addLog(msg) {
+      const container = document.getElementById('logContainer');
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      entry.innerHTML = '<span class="log-time">' + new Date().toLocaleTimeString() + '</span> ' + msg;
+      container.insertBefore(entry, container.firstChild);
+      if (container.children.length > 50) container.removeChild(container.lastChild);
+    }
+
+    // Auto-connect on load
+    window.addEventListener('DOMContentLoaded', () => connect());
+  </script>
+</body>
+</html>
