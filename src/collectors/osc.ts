@@ -48,7 +48,17 @@ function parseOsc(msg: Buffer): OscMessage | null {
   }
 }
 
-export function startOscListener(wallId: string, mqttClient: MqttClient) {
+export type OscCommandCallback = (command: {
+  timestamp: number;
+  address: string;
+  args: (string | number | boolean)[];
+}) => void;
+
+export function startOscListener(
+  wallId: string,
+  mqttClient: MqttClient,
+  onCommand?: OscCommandCallback
+) {
   const sock = dgram.createSocket("udp4");
   const topic = TOPICS.commands(wallId);
 
@@ -59,15 +69,14 @@ export function startOscListener(wallId: string, mqttClient: MqttClient) {
     // Skip userData — massive JSON blob with sensitive profile data
     if (parsed.address === "/VuOne/userData") return;
 
-    const args = parsed.args;
-
-    const payload = JSON.stringify({
+    const command = {
       timestamp: Date.now(),
       address: parsed.address,
-      args,
-    });
+      args: parsed.args,
+    };
 
-    mqttClient.publish(topic, payload, { qos: 0, retain: false });
+    mqttClient.publish(topic, JSON.stringify(command), { qos: 0, retain: false });
+    onCommand?.(command);
   });
 
   sock.on("error", (err) => {

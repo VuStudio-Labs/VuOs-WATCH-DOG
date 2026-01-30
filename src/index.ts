@@ -4,6 +4,7 @@ import { startSystemPolling, collectSystem } from "./collectors/system";
 import { startNetworkPolling, collectNetwork } from "./collectors/network";
 import { startAppPolling, collectApp } from "./collectors/app";
 import { startOscListener } from "./collectors/osc";
+import { startServer, updateTelemetry, broadcastCommand } from "./server";
 import type { TelemetryPayload } from "./types";
 
 const PUBLISH_INTERVAL_MS = 2_000;
@@ -44,8 +45,11 @@ async function main() {
     console.log("[watchdog] MQTT reconnecting...");
   });
 
-  // Start OSC listener — forwards commands to vu/{wallId}/commands
-  startOscListener(config.wallId, client);
+  // Start local dashboard server
+  startServer(config.wallId);
+
+  // Start OSC listener — forwards commands to MQTT + local dashboard
+  startOscListener(config.wallId, client, broadcastCommand);
 
   // Publish config (retained) — refresh every 60s
   function publishConfig() {
@@ -71,6 +75,7 @@ async function main() {
     try {
       const data = snapshot(config.wallId);
       publishTelemetry(client, config.wallId, data);
+      updateTelemetry(data);
     } catch (err: any) {
       console.error("[watchdog] Error publishing:", err.message);
     }

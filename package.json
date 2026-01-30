@@ -5,12 +5,14 @@
   "scripts": {
     "dev": "bun --watch run src/index.ts",
     "start": "bun run src/index.ts",
-    "build": "bun build --compile src/index.ts --outfile vu-watchdog.exe"
+    "build": "bun build --compile src/index.ts --outfile vu-watchdog.exe && bun scripts/set-icon.ts"
   },
   "dependencies": {
     "mqtt": "^5.14.1"
   },
   "devDependencies": {
-    "@types/bun": "^1.3.3"
+    "@resvg/resvg-js": "^2.6.2",
+    "@types/bun": "^1.3.3",
+    "rcedit": "^5.0.2"
   }
 }
