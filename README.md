@@ -4,6 +4,8 @@ System health monitor and watchdog for [Vu One OS](https://vu.studio) display wa
 
 Compiles to a single portable `.exe` via [Bun](https://bun.sh).
 
+![Dashboard](docs/dashboard.png)
+
 ## Features
 
 - **Real-time telemetry** — CPU, RAM, GPU (NVIDIA), disk, network latency, process health
