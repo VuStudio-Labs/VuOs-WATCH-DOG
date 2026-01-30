@@ -1,3 +1,5 @@
+import { hideConsole } from "./console";
+import { startTray } from "./tray";
 import { loadConfig, readConfigs } from "./config";
 import { connectMqtt, publishTelemetry, TOPICS } from "./mqtt";
 import { startSystemPolling, collectSystem } from "./collectors/system";
@@ -20,6 +22,9 @@ function snapshot(wallId: string): TelemetryPayload {
 }
 
 async function main() {
+  // Hide the console window immediately — tray menu can re-show it
+  hideConsole();
+
   console.log("[watchdog] Starting...");
 
   const config = loadConfig();
@@ -47,6 +52,9 @@ async function main() {
 
   // Start local dashboard server
   startServer(config.wallId);
+
+  // Launch system tray icon
+  startTray(config.wallId);
 
   // Start OSC listener — forwards commands to MQTT + local dashboard
   startOscListener(config.wallId, client, broadcastCommand);

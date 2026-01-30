@@ -196,10 +196,11 @@
       <span style="font-size:13px;color:#525252;font-weight:500;">Watchdog</span>
       <div id="wallStatus" style="display:none;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600;letter-spacing:0.03em;"></div>
     </div>
-    <div class="status">
+    <div class="status" style="display:flex;align-items:center;gap:12px;">
       <span class="data-points" id="dataPoints"></span>
       <div class="status-dot" id="statusDot"></div>
       <span id="statusText">Disconnected</span>
+      <button id="killBtn" onclick="killWatchdog()" style="display:none;margin-left:8px;padding:4px 12px;font-size:12px;background:#dc2626;color:#fff;border:1px solid #991b1b;border-radius:6px;cursor:pointer;font-weight:600;">Kill Watchdog</button>
     </div>
   </div>
 
@@ -909,12 +910,15 @@
 
       setStatus('connecting');
 
-      client = mqtt.connect('wss://mqtt.vu.studio/mqtt', {
-        username: 'dev',
-        password: 'testing',
+      var brokerUrl = (window._mqttBroker && window._mqttBroker.url) || 'wss://mqtt.vu.studio/mqtt';
+      var brokerUser = (window._mqttBroker && window._mqttBroker.username) || '';
+      var brokerPass = (window._mqttBroker && window._mqttBroker.password) || '';
+      var mqttOpts = {
         clientId: 'telemetry-monitor-' + Math.random().toString(36).slice(2, 8),
         reconnectPeriod: 5000,
-      });
+      };
+      if (brokerUser) { mqttOpts.username = brokerUser; mqttOpts.password = brokerPass; }
+      client = mqtt.connect(brokerUrl, mqttOpts);
 
       const wildcardTopic = 'vu/' + wallId + '/#';
 
@@ -1249,6 +1253,9 @@
     let lastConfigJson = '';
 
     function handleConfig(data) {
+      // Stash MQTT broker config for remote connections
+      if (data.mqttBroker) window._mqttBroker = data.mqttBroker;
+
       // Dedupe — config is retained + published every 60s
       const json = JSON.stringify(data);
       const changed = json !== lastConfigJson;
@@ -1550,10 +1557,18 @@
       };
     }
 
+    function killWatchdog() {
+      if (!confirm('Kill the watchdog process?')) return;
+      fetch('/api/quit', { method: 'POST' })
+        .then(() => { document.getElementById('killBtn').textContent = 'Shutting down...'; })
+        .catch(() => { alert('Failed to reach watchdog'); });
+    }
+
     // Auto-connect on load — local WS if served from watchdog, MQTT otherwise
     window.addEventListener('DOMContentLoaded', () => {
       if (isLocal) {
         document.querySelector('.controls').style.display = 'none';
+        document.getElementById('killBtn').style.display = '';
         connectLocal();
       } else {
         connect();

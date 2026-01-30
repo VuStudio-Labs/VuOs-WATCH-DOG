@@ -1,6 +1,7 @@
 import html from "../index.html" with { type: "text" };
 import type { TelemetryPayload } from "./types";
 import { readConfigs } from "./config";
+import { getMqttBrokerConfig } from "./mqtt";
 import type { ServerWebSocket } from "bun";
 
 const PORT = 3200;
@@ -34,16 +35,19 @@ function broadcast(msg: object) {
   }
 }
 
-function sendConfig(ws: ServerWebSocket<WsData>) {
+function getConfigPayload() {
   const configs = readConfigs();
-  ws.send(JSON.stringify({ type: "config", data: configs }));
+  return { ...configs, mqttBroker: getMqttBrokerConfig() };
+}
+
+function sendConfig(ws: ServerWebSocket<WsData>) {
+  ws.send(JSON.stringify({ type: "config", data: getConfigPayload() }));
 }
 
 export function startServer(wallId: string) {
   // Broadcast config to all clients every 60s
   setInterval(() => {
-    const configs = readConfigs();
-    broadcast({ type: "config", data: configs });
+    broadcast({ type: "config", data: getConfigPayload() });
   }, 60_000);
 
   Bun.serve<WsData>({
@@ -58,6 +62,15 @@ export function startServer(wallId: string) {
           return new Response("WebSocket upgrade failed", { status: 400 });
         }
         return undefined;
+      }
+
+      // Quit watchdog
+      if (url.pathname === "/api/quit" && req.method === "POST") {
+        console.log("[watchdog] Quit requested from dashboard");
+        setTimeout(() => process.exit(0), 500);
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { "Content-Type": "application/json" },
+        });
       }
 
       // Serve index.html
@@ -86,12 +99,5 @@ export function startServer(wallId: string) {
     },
   });
 
-  const url = `http://localhost:${PORT}`;
-  console.log(`[watchdog] Dashboard: ${url}`);
-
-  // Open in default browser
-  const cmd = process.platform === "win32" ? ["cmd", "/c", "start", url]
-    : process.platform === "darwin" ? ["open", url]
-    : ["xdg-open", url];
-  Bun.spawn(cmd, { stdio: ["ignore", "ignore", "ignore"] });
+  console.log(`[watchdog] Dashboard: http://localhost:${PORT}`);
 }

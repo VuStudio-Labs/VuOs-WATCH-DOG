@@ -1,9 +1,18 @@
 import mqtt, { type MqttClient } from "mqtt";
 import type { TelemetryPayload } from "./types";
 
-const BROKER_URL = "mqtt://tramway.proxy.rlwy.net:20979";
-const USERNAME = "dev";
-const PASSWORD = "testing";
+const BROKER_URL = process.env.MQTT_BROKER_URL || "mqtt://tramway.proxy.rlwy.net:20979";
+const USERNAME = process.env.MQTT_USERNAME || "dev";
+const PASSWORD = process.env.MQTT_PASSWORD || "testing";
+
+/** Broker config for the dashboard client (WebSocket URL variant) */
+export function getMqttBrokerConfig() {
+  return {
+    url: process.env.MQTT_BROKER_WS_URL || "wss://mqtt.vu.studio/mqtt",
+    username: USERNAME,
+    password: PASSWORD,
+  };
+}
 
 export const TOPICS = {
   telemetry: (wallId: string) => `vu/${wallId}/telemetry`,
