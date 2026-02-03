@@ -103,6 +103,8 @@ function readServerLock(): ServerLockInfo {
   }
 }
 
+const ERROR_WINDOW_MS = 60 * 60 * 1000; // Only count errors from the last hour
+
 function readRecentErrors(): LogMetrics {
   try {
     const stat = fs.statSync(ERROR_LOG);
@@ -117,10 +119,19 @@ function readRecentErrors(): LogMetrics {
     const lines = text.split("\n").filter((l) => l.trim().length > 0);
     const errorLines = lines.filter((l) => /^\d{4}-\d{2}-\d{2}/.test(l.trim()));
 
+    // Filter to errors within the last hour
+    const cutoff = Date.now() - ERROR_WINDOW_MS;
+    const recentLines = errorLines.filter((l) => {
+      const match = l.match(/^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})/);
+      if (!match) return false;
+      const ts = new Date(match[1].replace(" ", "T")).getTime();
+      return !isNaN(ts) && ts >= cutoff;
+    });
+
     let lastError: string | null = null;
     let lastErrorTime: string | null = null;
-    if (errorLines.length > 0) {
-      const last = errorLines[errorLines.length - 1];
+    if (recentLines.length > 0) {
+      const last = recentLines[recentLines.length - 1];
       const match = last.match(/^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[\d.]*Z?)\s*(.*)/);
       if (match) {
         lastErrorTime = match[1];
@@ -130,7 +141,7 @@ function readRecentErrors(): LogMetrics {
       }
     }
 
-    return { recentErrorCount: errorLines.length, lastError, lastErrorTime };
+    return { recentErrorCount: recentLines.length, lastError, lastErrorTime };
   } catch {
     return { recentErrorCount: 0, lastError: null, lastErrorTime: null };
   }

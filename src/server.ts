@@ -1,9 +1,9 @@
 import html from "../index.html" with { type: "text" };
-import type { TelemetryPayload } from "./types";
+import type { TelemetryPayload, HealthPayload, EventPayload, AckPayload } from "./types";
 import { readConfigs, VUOS_DIR } from "./config";
-import { getMqttBrokerConfig, switchBroker, getActiveBrokerId } from "./mqtt";
+import { getMqttBrokerConfig, getActiveBrokerId } from "./mqtt";
 import type { ServerWebSocket } from "bun";
-import * as path from "path";
+import type { CommandProcessor } from "./commands";
 
 const PORT = 3200;
 
@@ -13,10 +13,29 @@ const wsClients = new Set<ServerWebSocket<WsData>>();
 let nextId = 0;
 
 let latestTelemetry: TelemetryPayload | null = null;
+let latestHealth: HealthPayload | null = null;
+let commandProcessor: CommandProcessor | null = null;
+
+export function setCommandProcessor(cp: CommandProcessor) {
+  commandProcessor = cp;
+}
 
 export function updateTelemetry(data: TelemetryPayload) {
   latestTelemetry = data;
   broadcast({ type: "telemetry", data });
+}
+
+export function broadcastHealth(data: HealthPayload) {
+  latestHealth = data;
+  broadcast({ type: "health", data });
+}
+
+export function broadcastEvent(event: EventPayload) {
+  broadcast({ type: "event", data: event });
+}
+
+export function broadcastAck(ack: AckPayload) {
+  broadcast({ type: "ack", data: ack });
 }
 
 export function broadcastCommand(command: {
@@ -65,94 +84,51 @@ export function startServer(wallId: string) {
         return undefined;
       }
 
-      // Start Vu One OS (launch only, no kill)
+      // --- All action endpoints route through command processor ---
+
+      // Start Vu One OS
       if (url.pathname === "/api/start-vuos" && req.method === "POST") {
-        console.log("[watchdog] Start Vu One OS requested from dashboard");
-        try {
-          const vuosExe = path.resolve(VUOS_DIR, "..", "..", "..", "Vu One.exe");
-          console.log("[watchdog] Launching:", vuosExe);
-          Bun.spawn([vuosExe], {
-            cwd: path.dirname(vuosExe),
-            stdio: ["ignore", "ignore", "ignore"],
-          });
-          console.log("[watchdog] Vu One OS launched");
-          return new Response(JSON.stringify({ ok: true }), {
-            headers: { "Content-Type": "application/json" },
-          });
-        } catch (e: any) {
-          console.error("[watchdog] Failed to launch Vu One:", e.message);
-          return new Response(JSON.stringify({ ok: false, error: e.message }), {
-            status: 500,
-            headers: { "Content-Type": "application/json" },
-          });
+        if (!commandProcessor) {
+          return jsonResponse({ ok: false, error: "Not ready" }, 503);
         }
+        const ack = await commandProcessor.handleLocal("START_VUOS");
+        return jsonResponse({ ok: ack.status === "APPLIED", ack });
       }
 
       // Restart Vu One OS
       if (url.pathname === "/api/restart-vuos" && req.method === "POST") {
-        console.log("[watchdog] Restart Vu One OS requested from dashboard");
-        try {
-          // Kill existing process
-          Bun.spawn(["taskkill", "/F", "/IM", "Vu One.exe"], {
-            stdio: ["ignore", "ignore", "ignore"],
-          });
-          // Wait a moment then relaunch
-          const vuosExe = path.resolve(VUOS_DIR, "..", "..", "..", "Vu One.exe");
-          console.log("[watchdog] Will relaunch:", vuosExe);
-          setTimeout(() => {
-            try {
-              Bun.spawn([vuosExe], {
-                cwd: path.dirname(vuosExe),
-                stdio: ["ignore", "ignore", "ignore"],
-              });
-              console.log("[watchdog] Vu One OS relaunched");
-            } catch (e: any) {
-              console.error("[watchdog] Failed to launch Vu One:", e.message);
-            }
-          }, 2000);
-          return new Response(JSON.stringify({ ok: true }), {
-            headers: { "Content-Type": "application/json" },
-          });
-        } catch (e: any) {
-          return new Response(JSON.stringify({ ok: false, error: e.message }), {
-            status: 500,
-            headers: { "Content-Type": "application/json" },
-          });
+        if (!commandProcessor) {
+          return jsonResponse({ ok: false, error: "Not ready" }, 503);
         }
+        const ack = await commandProcessor.handleLocal("RESTART_VUOS");
+        return jsonResponse({ ok: ack.status === "APPLIED", ack });
       }
 
       // Switch MQTT broker
       if (url.pathname === "/api/switch-broker" && req.method === "POST") {
+        if (!commandProcessor) {
+          return jsonResponse({ ok: false, error: "Not ready" }, 503);
+        }
         try {
           const body = await req.json();
           const brokerId = body.brokerId;
           if (!brokerId) {
-            return new Response(JSON.stringify({ ok: false, error: "Missing brokerId" }), {
-              status: 400,
-              headers: { "Content-Type": "application/json" },
-            });
+            return jsonResponse({ ok: false, error: "Missing brokerId" }, 400);
           }
-          await switchBroker(brokerId);
-          // Notify all dashboard clients of the broker change
-          broadcast({ type: "broker-switched", data: { activeBrokerId: getActiveBrokerId() } });
-          return new Response(JSON.stringify({ ok: true, activeBrokerId: getActiveBrokerId() }), {
-            headers: { "Content-Type": "application/json" },
-          });
+          const ack = await commandProcessor.handleLocal("SWITCH_BROKER", { brokerId });
+          return jsonResponse({ ok: ack.status === "APPLIED", ack, activeBrokerId: getActiveBrokerId() });
         } catch (e: any) {
-          return new Response(JSON.stringify({ ok: false, error: e.message }), {
-            status: 500,
-            headers: { "Content-Type": "application/json" },
-          });
+          return jsonResponse({ ok: false, error: e.message }, 500);
         }
       }
 
       // Quit watchdog
       if (url.pathname === "/api/quit" && req.method === "POST") {
-        console.log("[watchdog] Quit requested from dashboard");
-        setTimeout(() => process.exit(0), 500);
-        return new Response(JSON.stringify({ ok: true }), {
-          headers: { "Content-Type": "application/json" },
-        });
+        if (!commandProcessor) {
+          return jsonResponse({ ok: false, error: "Not ready" }, 503);
+        }
+        const ack = await commandProcessor.handleLocal("QUIT_WATCHDOG");
+        return jsonResponse({ ok: ack.status === "APPLIED", ack });
       }
 
       // Serve index.html
@@ -171,9 +147,19 @@ export function startServer(wallId: string) {
         if (latestTelemetry) {
           ws.send(JSON.stringify({ type: "telemetry", data: latestTelemetry }));
         }
+        if (latestHealth) {
+          ws.send(JSON.stringify({ type: "health", data: latestHealth }));
+        }
       },
-      message(_ws, _msg) {
-        // No inbound messages expected
+      message(_ws, msg) {
+        // Handle inbound commands from local dashboard
+        if (!commandProcessor) return;
+        try {
+          const parsed = JSON.parse(String(msg));
+          if (parsed.type === "command" && parsed.data) {
+            commandProcessor.handleLocal(parsed.data.type, parsed.data.args || {});
+          }
+        } catch {}
       },
       close(ws) {
         wsClients.delete(ws);
@@ -182,4 +168,11 @@ export function startServer(wallId: string) {
   });
 
   console.log(`[watchdog] Dashboard: http://localhost:${PORT}`);
+}
+
+function jsonResponse(data: object, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 }

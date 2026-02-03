@@ -1,5 +1,5 @@
 import mqtt, { type MqttClient } from "mqtt";
-import type { TelemetryPayload } from "./types";
+import type { TelemetryPayload, HealthPayload, EventPayload, AckPayload, LeasePayload } from "./types";
 
 export interface BrokerConfig {
   id: string;
@@ -47,19 +47,28 @@ export function getMqttBrokerConfig() {
 }
 
 export const TOPICS = {
-  telemetry: (wallId: string) => `watchdog/${wallId}/telemetry`,
-  status: (wallId: string) => `watchdog/${wallId}/status`,
-  commands: (wallId: string) => `watchdog/${wallId}/commands`,
-  config: (wallId: string) => `watchdog/${wallId}/config`,
-  control: (wallId: string) => `watchdog/${wallId}/control`,
+  // Legacy (keep)
+  telemetry: (wId: string) => `watchdog/${wId}/telemetry`,
+  status:    (wId: string) => `watchdog/${wId}/status`,
+  commands:  (wId: string) => `watchdog/${wId}/commands`,    // OSC commands
+  config:    (wId: string) => `watchdog/${wId}/config`,
+  control:   (wId: string) => `watchdog/${wId}/control`,     // legacy shim
+
+  // New ops plane
+  health:    (wId: string) => `watchdog/${wId}/health`,
+  event:     (wId: string) => `watchdog/${wId}/event`,
+  commandSub:(wId: string) => `watchdog/${wId}/command/+`,   // subscribe wildcard
+  commandTo: (wId: string, clientId: string) => `watchdog/${wId}/command/${clientId}`,
+  ack:       (wId: string, clientId: string) => `watchdog/${wId}/ack/${clientId}`,
+  lease:     (wId: string) => `watchdog/${wId}/lease`,
 };
 
-export type ControlHandler = (action: string, payload: Record<string, any>) => void;
+export type MessageHandler = (topic: string, payload: Buffer) => void;
 
 let activeClient: MqttClient | null = null;
 let activeBrokerId: string = BROKERS[0].id;
 let activeWallId: string = "";
-let activeControlHandler: ControlHandler | undefined;
+let activeMessageHandler: MessageHandler | undefined;
 
 function createClient(
   broker: BrokerConfig,
@@ -106,29 +115,30 @@ function createClient(
   });
 }
 
-function subscribeControl(client: MqttClient, wallId: string, onControl?: ControlHandler) {
-  client.subscribe(TOPICS.control(wallId), { qos: 1 });
+function subscribeTopics(client: MqttClient, wallId: string, onMessage?: MessageHandler) {
+  // Subscribe to all inbound topics
+  client.subscribe(TOPICS.control(wallId), { qos: 1 });     // legacy
+  client.subscribe(TOPICS.commandSub(wallId), { qos: 1 });  // new command plane
+  client.subscribe(TOPICS.lease(wallId), { qos: 1 });       // lease updates
+
   client.on("message", (topic, payload) => {
-    if (topic === TOPICS.control(wallId) && onControl) {
-      try {
-        const msg = JSON.parse(payload.toString());
-        onControl(msg.action || "", msg);
-      } catch {}
+    if (onMessage) {
+      onMessage(topic, payload);
     }
   });
 }
 
 export async function connectMqtt(
   wallId: string,
-  onControl?: ControlHandler
+  onMessage?: MessageHandler
 ): Promise<MqttClient> {
   activeWallId = wallId;
-  activeControlHandler = onControl;
+  activeMessageHandler = onMessage;
 
   const broker = BROKERS[0]; // default to first (EMQX)
   activeBrokerId = broker.id;
   activeClient = await createClient(broker, wallId);
-  subscribeControl(activeClient, wallId, onControl);
+  subscribeTopics(activeClient, wallId, onMessage);
 
   return activeClient;
 }
@@ -143,21 +153,16 @@ export async function switchBroker(brokerId: string): Promise<MqttClient> {
 
   console.log(`[mqtt] Switching to ${broker.label}...`);
 
-  // Publish offline on old broker before disconnecting
+  // Disconnect old broker (no fake offline — event system handles this)
   if (activeClient) {
     try {
-      activeClient.publish(
-        TOPICS.status(activeWallId),
-        JSON.stringify({ status: "offline", wallId: activeWallId, timestamp: Date.now() }),
-        { qos: 1, retain: true }
-      );
       activeClient.end(true);
     } catch {}
   }
 
   activeBrokerId = brokerId;
   activeClient = await createClient(broker, activeWallId);
-  subscribeControl(activeClient, activeWallId, activeControlHandler);
+  subscribeTopics(activeClient, activeWallId, activeMessageHandler);
 
   console.log(`[mqtt] Switched to ${broker.label}`);
   return activeClient;
@@ -171,29 +176,39 @@ export function getActiveBrokerId(): string {
   return activeBrokerId;
 }
 
-export function publishTelemetry(
-  wallId: string,
-  data: TelemetryPayload
-): void {
+// --- Publish functions ---
+
+export function publishTelemetry(wallId: string, data: TelemetryPayload): void {
   if (!activeClient) return;
-  const json = JSON.stringify(data);
-  activeClient.publish(TOPICS.telemetry(wallId), json, { qos: 0, retain: true });
+  activeClient.publish(TOPICS.telemetry(wallId), JSON.stringify(data), { qos: 0, retain: false });
 }
 
-export function publishConfig(
-  wallId: string,
-  data: object
-): void {
+export function publishHealth(wallId: string, data: HealthPayload): void {
   if (!activeClient) return;
-  const json = JSON.stringify(data);
-  activeClient.publish(TOPICS.config(wallId), json, { qos: 0, retain: true });
+  activeClient.publish(TOPICS.health(wallId), JSON.stringify(data), { qos: 1, retain: true });
 }
 
-export function publishCommand(
-  wallId: string,
-  data: object
-): void {
+export function publishConfig(wallId: string, data: object): void {
   if (!activeClient) return;
-  const json = JSON.stringify(data);
-  activeClient.publish(TOPICS.commands(wallId), json, { qos: 0, retain: false });
+  activeClient.publish(TOPICS.config(wallId), JSON.stringify(data), { qos: 0, retain: true });
+}
+
+export function publishCommand(wallId: string, data: object): void {
+  if (!activeClient) return;
+  activeClient.publish(TOPICS.commands(wallId), JSON.stringify(data), { qos: 0, retain: false });
+}
+
+export function publishEvent(wallId: string, data: EventPayload): void {
+  if (!activeClient) return;
+  activeClient.publish(TOPICS.event(wallId), JSON.stringify(data), { qos: 1, retain: false });
+}
+
+export function publishAck(wallId: string, clientId: string, data: AckPayload): void {
+  if (!activeClient) return;
+  activeClient.publish(TOPICS.ack(wallId, clientId), JSON.stringify(data), { qos: 1, retain: false });
+}
+
+export function publishLease(wallId: string, data: LeasePayload): void {
+  if (!activeClient) return;
+  activeClient.publish(TOPICS.lease(wallId), JSON.stringify(data), { qos: 1, retain: true });
 }

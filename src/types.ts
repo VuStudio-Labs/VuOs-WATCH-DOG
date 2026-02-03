@@ -65,3 +65,75 @@ export interface TelemetryPayload {
   network: NetworkMetrics;
   app: AppMetrics;
 }
+
+// --- Operational Mode ---
+
+export type OperationalMode = "STARTING" | "READY" | "DEGRADED" | "CRITICAL" | "SHUTTING_DOWN";
+
+export type ConditionLevel = "DEGRADED" | "CRITICAL";
+
+// --- Health (bounded retained summary) ---
+
+export interface HealthPayload {
+  schema: "vu.watchdog.health.v1";
+  ts: number;
+  wallId: string;
+  mode: OperationalMode;
+  conditions: string[];
+  system: { cpu: number; mem: number; gpu: number | null; disk: number };
+  network: { internet: boolean; latencyMs: number | null; localServer: boolean; peers: number };
+  app: { vuos: "RUNNING" | "STOPPED"; server: "RUNNING" | "STOPPED"; lockHealthy: boolean; recentErrors: number };
+}
+
+// --- Events ---
+
+export type EventSeverity = "INFO" | "WARN" | "ERROR" | "CRITICAL";
+
+export interface EventPayload {
+  schema: "vu.watchdog.event.v1";
+  ts: number;
+  wallId: string;
+  type: string;
+  severity: EventSeverity;
+  details: Record<string, any>;
+}
+
+// --- Commands ---
+
+export type CommandType =
+  | "RESTART_VUOS"
+  | "START_VUOS"
+  | "STOP_VUOS"
+  | "QUIT_WATCHDOG"
+  | "SWITCH_BROKER"
+  | "REQUEST_TELEMETRY"
+  | "REQUEST_CONFIG";
+
+export interface CommandPayload {
+  schema: "vu.watchdog.command.v1";
+  ts: number;
+  commandId: string;
+  ttlMs: number;
+  type: CommandType;
+  args: Record<string, any>;
+}
+
+export type AckStatus = "RECEIVED" | "ACCEPTED" | "APPLIED" | "REJECTED" | "FAILED" | "EXPIRED";
+
+export interface AckPayload {
+  schema: "vu.watchdog.ack.v1";
+  ts: number;
+  commandId: string;
+  status: AckStatus;
+  message: string;
+  details: Record<string, any>;
+}
+
+// --- Lease ---
+
+export interface LeasePayload {
+  schema: "vu.watchdog.lease.v1";
+  ts: number;
+  owner: string;
+  expiresTs: number;
+}

@@ -187,6 +187,77 @@
       color: #525252;
       font-variant-numeric: tabular-nums;
     }
+
+    /* Health Mode Banner */
+    .health-banner {
+      display: none;
+      padding: 10px 20px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      border: 1px solid;
+    }
+    .health-banner .conditions {
+      font-weight: 400;
+      font-size: 12px;
+      margin-top: 4px;
+      opacity: 0.85;
+    }
+    .health-banner.mode-READY { background: #052e16; color: #22c55e; border-color: #166534; }
+    .health-banner.mode-STARTING { background: #172554; color: #60a5fa; border-color: #1e40af; }
+    .health-banner.mode-DEGRADED { background: #451a03; color: #f59e0b; border-color: #92400e; }
+    .health-banner.mode-CRITICAL { background: #450a0a; color: #ef4444; border-color: #991b1b; }
+    .health-banner.mode-SHUTTING_DOWN { background: #1c1917; color: #a8a29e; border-color: #44403c; }
+
+    /* Events Panel */
+    .event-entry {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 11px;
+      padding: 4px 0;
+      border-bottom: 1px solid #1a1a1a;
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+    .event-entry:last-child { border-bottom: none; }
+    .event-severity {
+      font-weight: 700;
+      font-size: 10px;
+      padding: 1px 5px;
+      border-radius: 3px;
+      flex-shrink: 0;
+    }
+    .event-severity.sev-INFO { background: #172554; color: #60a5fa; }
+    .event-severity.sev-WARN { background: #451a03; color: #f59e0b; }
+    .event-severity.sev-ERROR { background: #450a0a; color: #ef4444; }
+    .event-severity.sev-CRITICAL { background: #7f1d1d; color: #fca5a5; }
+    .event-type { color: #e5e5e5; font-weight: 600; }
+    .event-details { color: #737373; font-size: 10px; }
+    .event-time { color: #525252; flex-shrink: 0; }
+
+    /* Lease Indicator */
+    .lease-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      padding: 4px 12px;
+      border-radius: 6px;
+      background: #171717;
+      border: 1px solid #333;
+      color: #a3a3a3;
+    }
+    .lease-indicator.active { border-color: #f59e0b; color: #f59e0b; }
+
+    /* Ack feedback */
+    .ack-status {
+      font-size: 11px;
+      margin-left: 6px;
+      font-weight: 500;
+      transition: opacity 0.3s;
+    }
   </style>
 </head>
 <body>
@@ -212,6 +283,10 @@
     <span id="remoteControls"><label style="margin-left:8px;">Wall ID:</label>
     <input type="text" id="wallIdInput" value="5538" style="width: 120px;" placeholder="e.g. 5538" />
     <button id="connectBtn" onclick="toggleConnection()">Connect</button></span>
+    <div id="leaseIndicator" class="lease-indicator" style="display:none;margin-left:8px;">
+      <span id="leaseIcon">&#128275;</span>
+      <span id="leaseText">No lease</span>
+    </div>
     <label style="margin-left:12px;">History:</label>
     <select id="historyRange" onchange="updateChartRange()">
       <option value="0.5" selected>30 sec</option>
@@ -221,6 +296,9 @@
       <option value="0">All</option>
     </select>
   </div>
+
+  <!-- Health Mode Banner -->
+  <div id="healthBanner" class="health-banner"></div>
 
   <div id="dashboard" style="display:none;">
     <!-- Live Metrics -->
@@ -284,8 +362,27 @@
         </div>
       </div>
 
-      <div class="card">
-        <div class="card-title">System Health</div>
+      <div class="card" id="networkConfigCard">
+        <div class="card-title">Network</div>
+        <div class="metric-row">
+          <span class="metric-label">Internet</span>
+          <span class="metric-value" id="netOnline">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Latency</span>
+          <span class="metric-value" id="netLatency">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Local Server</span>
+          <span class="metric-value" id="netLocal">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Connected Peers</span>
+          <span class="metric-value" id="netPeers">—</span>
+        </div>
+
+        <div style="border-top:1px solid #262626;margin:14px 0;"></div>
+        <div class="card-title" style="margin-bottom:12px;">System Health</div>
         <div class="metric-row">
           <span class="metric-label">Thermal Throttling</span>
           <span class="metric-value" id="sysThrottle">—</span>
@@ -305,26 +402,6 @@
         <div class="metric-row">
           <span class="metric-label">Event Message</span>
           <span class="metric-value" id="sysEventMsg" style="font-size:10px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">—</span>
-        </div>
-      </div>
-
-      <div class="card" id="networkConfigCard">
-        <div class="card-title">Network</div>
-        <div class="metric-row">
-          <span class="metric-label">Internet</span>
-          <span class="metric-value" id="netOnline">—</span>
-        </div>
-        <div class="metric-row">
-          <span class="metric-label">Latency</span>
-          <span class="metric-value" id="netLatency">—</span>
-        </div>
-        <div class="metric-row">
-          <span class="metric-label">Local Server</span>
-          <span class="metric-value" id="netLocal">—</span>
-        </div>
-        <div class="metric-row">
-          <span class="metric-label">Connected Peers</span>
-          <span class="metric-value" id="netPeers">—</span>
         </div>
 
         <div id="configSection" style="display:none;">
@@ -526,6 +603,17 @@
       </div>
     </div>
 
+    <!-- Events Panel -->
+    <div class="charts-grid">
+      <div class="chart-card" style="margin-bottom:0;">
+        <div class="chart-header">
+          <div class="card-title" style="margin-bottom:0;">Events</div>
+          <span class="data-points" id="eventCount">0 events</span>
+        </div>
+        <div class="log-container" id="eventLogContainer" style="max-height:240px;"></div>
+      </div>
+    </div>
+
     <!-- Data Throughput -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px;">
       <div class="card">
@@ -632,8 +720,8 @@
     // ── Data throughput tracking ──
     let totalBytes = 0;
     let totalMessages = 0;
-    const topicBytes = { telemetry: 0, commands: 0, config: 0, health: 0, other: 0 };
-    const topicMsgs = { telemetry: 0, commands: 0, config: 0, health: 0, other: 0 };
+    const topicBytes = { telemetry: 0, commands: 0, config: 0, health: 0, event: 0, ack: 0, other: 0 };
+    const topicMsgs = { telemetry: 0, commands: 0, config: 0, health: 0, event: 0, ack: 0, other: 0 };
     let byteSecondBucket = 0;
     let byteLastSecond = Math.floor(Date.now() / 1000);
     let peakBytesPerSec = 0;
@@ -1030,8 +1118,10 @@
         let topicType = 'other';
         if (t.endsWith('/commands')) topicType = 'commands';
         else if (t.endsWith('/config')) topicType = 'config';
-        else if (t.endsWith('/status')) topicType = 'health';
+        else if (t.endsWith('/status') || t.endsWith('/health')) topicType = 'health';
         else if (t.endsWith('/telemetry')) topicType = 'telemetry';
+        else if (t.endsWith('/event')) topicType = 'event';
+        else if (t.includes('/ack/')) topicType = 'ack';
         topicBytes[topicType] += msgBytes;
         topicMsgs[topicType] += 1;
 
@@ -1055,6 +1145,12 @@
             handleConfig(data);
           } else if (t.endsWith('/status')) {
             handleHealth(data);
+          } else if (t.endsWith('/health')) {
+            handleHealthV2(data);
+          } else if (t.endsWith('/event')) {
+            appendEvent(data);
+          } else if (t.includes('/ack/')) {
+            handleAck(data);
           } else if (t.endsWith('/telemetry')) {
             messageCount++;
             updateDashboard(data);
@@ -1185,8 +1281,8 @@
       el('tpAvgMsg').textContent = totalMessages > 0 ? formatBytes(totalBytes / totalMessages) : '—';
 
       // Per-topic breakdown
-      const types = ['commands', 'telemetry', 'config', 'health', 'other'];
-      const colors = { commands: '#ef4444', telemetry: '#3b82f6', config: '#f59e0b', health: '#22c55e', other: '#737373' };
+      const types = ['commands', 'telemetry', 'config', 'health', 'event', 'ack', 'other'];
+      const colors = { commands: '#ef4444', telemetry: '#3b82f6', config: '#f59e0b', health: '#22c55e', event: '#a855f7', ack: '#06b6d4', other: '#737373' };
       let html = '';
       for (const tp of types) {
         if (topicMsgs[tp] === 0) continue;
@@ -1616,6 +1712,130 @@
       if (container.children.length > 50) container.removeChild(container.lastChild);
     }
 
+    // ---- Health v2 (mode banner) ----
+
+    let eventTotalCount = 0;
+
+    function handleHealthV2(data) {
+      const banner = document.getElementById('healthBanner');
+      if (!data || !data.mode) return;
+
+      banner.style.display = 'block';
+      // Remove previous mode classes
+      banner.className = 'health-banner mode-' + data.mode;
+
+      const modeLabels = {
+        READY: 'READY',
+        STARTING: 'STARTING',
+        DEGRADED: 'DEGRADED',
+        CRITICAL: 'CRITICAL',
+        SHUTTING_DOWN: 'SHUTTING DOWN',
+      };
+
+      let html = '<span>' + (modeLabels[data.mode] || data.mode) + '</span>';
+      if (data.conditions && data.conditions.length > 0) {
+        html += '<div class="conditions">' + data.conditions.map(function(c) {
+          return c.replace(/_/g, ' ');
+        }).join(' &middot; ') + '</div>';
+      }
+      banner.innerHTML = html;
+
+      // Also update the wall status badge in header
+      const badge = document.getElementById('wallStatus');
+      badge.style.display = 'inline-block';
+      if (data.mode === 'READY') {
+        badge.textContent = 'READY';
+        badge.style.background = '#052e16'; badge.style.color = '#22c55e'; badge.style.border = '1px solid #166534';
+      } else if (data.mode === 'DEGRADED') {
+        badge.textContent = 'DEGRADED';
+        badge.style.background = '#451a03'; badge.style.color = '#f59e0b'; badge.style.border = '1px solid #92400e';
+      } else if (data.mode === 'CRITICAL') {
+        badge.textContent = 'CRITICAL';
+        badge.style.background = '#450a0a'; badge.style.color = '#ef4444'; badge.style.border = '1px solid #991b1b';
+      } else if (data.mode === 'STARTING') {
+        badge.textContent = 'STARTING';
+        badge.style.background = '#172554'; badge.style.color = '#60a5fa'; badge.style.border = '1px solid #1e40af';
+      } else {
+        badge.textContent = data.mode;
+        badge.style.background = '#1c1917'; badge.style.color = '#a8a29e'; badge.style.border = '1px solid #44403c';
+      }
+
+      // Update lease indicator if lease info comes with health (from server state)
+      // Lease is managed separately via events/ack
+    }
+
+    // ---- Events Panel ----
+
+    function appendEvent(event) {
+      if (!event) return;
+      eventTotalCount++;
+      document.getElementById('eventCount').textContent = eventTotalCount + ' events';
+
+      const container = document.getElementById('eventLogContainer');
+      const entry = document.createElement('div');
+      entry.className = 'event-entry';
+
+      const severity = event.severity || 'INFO';
+      const type = event.type || 'UNKNOWN';
+      const details = event.details || {};
+      const detailStr = Object.keys(details).length > 0
+        ? Object.entries(details).map(function(kv) { return kv[0] + '=' + JSON.stringify(kv[1]); }).join(', ')
+        : '';
+
+      const time = event.ts ? new Date(event.ts).toLocaleTimeString() : new Date().toLocaleTimeString();
+
+      entry.innerHTML =
+        '<span class="event-time">' + time + '</span>' +
+        '<span class="event-severity sev-' + severity + '">' + severity + '</span>' +
+        '<span class="event-type">' + type + '</span>' +
+        (detailStr ? '<span class="event-details">' + detailStr + '</span>' : '');
+
+      container.insertBefore(entry, container.firstChild);
+      // Cap at 100 entries
+      while (container.children.length > 100) container.removeChild(container.lastChild);
+    }
+
+    // ---- Ack Feedback ----
+
+    const pendingAcks = {};
+
+    function handleAck(ack) {
+      if (!ack || !ack.commandId) return;
+
+      // Find if there's a pending command waiting for this ack
+      const pending = pendingAcks[ack.commandId];
+      if (pending && pending.statusEl) {
+        const el = pending.statusEl;
+        if (ack.status === 'RECEIVED') {
+          el.textContent = 'Received...';
+          el.style.color = '#60a5fa';
+        } else if (ack.status === 'APPLIED') {
+          el.textContent = 'Applied';
+          el.style.color = '#22c55e';
+          setTimeout(function() { el.textContent = ''; }, 3000);
+          delete pendingAcks[ack.commandId];
+        } else if (ack.status === 'REJECTED') {
+          el.textContent = 'Rejected: ' + (ack.message || '');
+          el.style.color = '#f59e0b';
+          setTimeout(function() { el.textContent = ''; }, 5000);
+          delete pendingAcks[ack.commandId];
+        } else if (ack.status === 'FAILED') {
+          el.textContent = 'Failed: ' + (ack.message || '');
+          el.style.color = '#ef4444';
+          setTimeout(function() { el.textContent = ''; }, 5000);
+          delete pendingAcks[ack.commandId];
+        } else if (ack.status === 'EXPIRED') {
+          el.textContent = 'Expired';
+          el.style.color = '#a8a29e';
+          setTimeout(function() { el.textContent = ''; }, 3000);
+          delete pendingAcks[ack.commandId];
+        }
+      }
+
+      // Log all acks to the event log as well
+      addLog('ACK [' + ack.status + '] ' + ack.commandId.slice(0, 16) + ': ' + (ack.message || ''));
+    }
+
     // ---- Local WebSocket connection (when served from watchdog) ----
 
     let localWs = null;
@@ -1653,6 +1873,12 @@
             handleCommand(msg.data);
           } else if (msg.type === 'config') {
             handleConfig(msg.data);
+          } else if (msg.type === 'health') {
+            handleHealthV2(msg.data);
+          } else if (msg.type === 'event') {
+            appendEvent(msg.data);
+          } else if (msg.type === 'ack') {
+            handleAck(msg.data);
           }
         } catch {}
       };
@@ -1675,11 +1901,14 @@
       fetch('/api/start-vuos', { method: 'POST' })
         .then(function(r) { return r.json(); })
         .then(function(data) {
-          if (data.ok) {
+          if (data.ok && data.ack) {
+            showAckOnBtn(btn, data.ack, 'Start Vu OS');
+          } else if (data.ok) {
             setTimeout(function() { btn.textContent = 'Start Vu OS'; btn.disabled = false; }, 5000);
           } else {
-            alert('Failed: ' + (data.error || 'unknown'));
-            btn.textContent = 'Start Vu OS'; btn.disabled = false;
+            btn.textContent = 'Failed: ' + (data.error || data.ack && data.ack.message || 'unknown');
+            btn.style.background = '#ef4444';
+            setTimeout(function() { btn.textContent = 'Start Vu OS'; btn.disabled = false; btn.style.background = '#16a34a'; }, 3000);
           }
         })
         .catch(function() { btn.textContent = 'Start Vu OS'; btn.disabled = false; });
@@ -1693,21 +1922,55 @@
       fetch('/api/restart-vuos', { method: 'POST' })
         .then(function(r) { return r.json(); })
         .then(function(data) {
-          if (data.ok) {
+          if (data.ok && data.ack) {
+            showAckOnBtn(btn, data.ack, 'Restart Vu OS');
+          } else if (data.ok) {
             setTimeout(function() { btn.textContent = 'Restart Vu OS'; btn.disabled = false; }, 5000);
           } else {
-            alert('Failed: ' + (data.error || 'unknown'));
-            btn.textContent = 'Restart Vu OS'; btn.disabled = false;
+            btn.textContent = 'Failed: ' + (data.error || data.ack && data.ack.message || 'unknown');
+            btn.style.background = '#ef4444';
+            setTimeout(function() { btn.textContent = 'Restart Vu OS'; btn.disabled = false; btn.style.background = '#2563eb'; }, 3000);
           }
         })
-        .catch(function() { alert('Failed to reach watchdog'); btn.textContent = 'Restart Vu OS'; btn.disabled = false; });
+        .catch(function() { btn.textContent = 'Restart Vu OS'; btn.disabled = false; });
     }
 
     function killWatchdog() {
       if (!confirm('Kill the watchdog process?')) return;
+      var btn = document.getElementById('killBtn');
+      btn.textContent = 'Shutting down...';
+      btn.disabled = true;
       fetch('/api/quit', { method: 'POST' })
-        .then(() => { document.getElementById('killBtn').textContent = 'Shutting down...'; })
-        .catch(() => { alert('Failed to reach watchdog'); });
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (data.ok) {
+            btn.textContent = 'Shutting down...';
+          } else {
+            btn.textContent = 'Failed: ' + (data.ack && data.ack.message || 'unknown');
+            setTimeout(function() { btn.textContent = 'Kill Watchdog'; btn.disabled = false; }, 3000);
+          }
+        })
+        .catch(function() { btn.textContent = 'Kill Watchdog'; btn.disabled = false; });
+    }
+
+    function showAckOnBtn(btn, ack, originalText) {
+      if (ack.status === 'APPLIED') {
+        btn.textContent = 'Applied';
+        btn.style.background = '#16a34a';
+      } else if (ack.status === 'REJECTED') {
+        btn.textContent = 'Rejected: ' + (ack.message || '');
+        btn.style.background = '#f59e0b';
+      } else {
+        btn.textContent = ack.status + ': ' + (ack.message || '');
+      }
+      setTimeout(function() {
+        btn.textContent = originalText;
+        btn.disabled = false;
+        // Reset background based on button
+        if (btn.id === 'startBtn') btn.style.background = '#16a34a';
+        else if (btn.id === 'restartBtn') btn.style.background = '#2563eb';
+        else if (btn.id === 'killBtn') btn.style.background = '#dc2626';
+      }, 4000);
     }
 
     // Auto-connect on load — local WS if served from watchdog, MQTT otherwise

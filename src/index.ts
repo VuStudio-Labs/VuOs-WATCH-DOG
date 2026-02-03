@@ -1,13 +1,23 @@
 import { hideConsole } from "./console";
 import { startTray } from "./tray";
 import { loadConfig, readConfigs, getOscPort, VUOS_DIR } from "./config";
-import { connectMqtt, publishTelemetry, publishConfig, publishCommand, switchBroker, getActiveClient, TOPICS } from "./mqtt";
+import {
+  connectMqtt, publishTelemetry, publishHealth, publishConfig,
+  publishCommand, publishEvent, switchBroker, getActiveClient, TOPICS,
+} from "./mqtt";
 import { startSystemPolling, collectSystem } from "./collectors/system";
 import { startNetworkPolling, collectNetwork } from "./collectors/network";
 import { startAppPolling, collectApp } from "./collectors/app";
 import { startOscListener } from "./collectors/osc";
-import { startServer, updateTelemetry, broadcastCommand } from "./server";
-import type { TelemetryPayload } from "./types";
+import {
+  startServer, updateTelemetry, broadcastCommand, broadcastHealth,
+  broadcastEvent, broadcastAck, setCommandProcessor,
+} from "./server";
+import { evaluateConditions, computeMode, buildHealth, setShuttingDown } from "./health";
+import { WatchdogEventEmitter } from "./events";
+import { CommandProcessor } from "./commands";
+import { LeaseManager } from "./lease";
+import type { TelemetryPayload, LeasePayload, CommandPayload } from "./types";
 import * as path from "path";
 
 const PUBLISH_INTERVAL_MS = 2_000;
@@ -20,25 +30,6 @@ function snapshot(wallId: string): TelemetryPayload {
     network: collectNetwork(),
     app: collectApp(),
   };
-}
-
-function handleRestart() {
-  console.log("[watchdog] Restart Vu One OS requested via MQTT control");
-  Bun.spawn(["taskkill", "/F", "/IM", "Vu One.exe"], {
-    stdio: ["ignore", "ignore", "ignore"],
-  });
-  const vuosExe = path.resolve(VUOS_DIR, "..", "..", "..", "Vu One.exe");
-  setTimeout(() => {
-    try {
-      Bun.spawn([vuosExe], {
-        cwd: path.dirname(vuosExe),
-        stdio: ["ignore", "ignore", "ignore"],
-      });
-      console.log("[watchdog] Vu One OS relaunched");
-    } catch (e: any) {
-      console.error("[watchdog] Failed to launch Vu One:", e.message);
-    }
-  }, 2000);
 }
 
 async function ensureSingleInstance() {
@@ -64,31 +55,160 @@ async function main() {
   console.log("[watchdog] Starting...");
 
   const config = loadConfig();
-  console.log(`[watchdog] Wall ID: ${config.wallId}, HTTP port: ${config.httpPort}`);
+  const wallId = config.wallId;
+  console.log(`[watchdog] Wall ID: ${wallId}, HTTP port: ${config.httpPort}`);
+
+  // --- Initialize ops plane ---
+
+  const leaseManager = new LeaseManager();
+
+  // Event emitter: publishes to MQTT + WebSocket
+  const eventEmitter = new WatchdogEventEmitter(wallId, (event) => {
+    publishEvent(wallId, event);
+    broadcastEvent(event);
+  });
+
+  // Command processor with handlers
+  const commandProcessor = new CommandProcessor(wallId, leaseManager, eventEmitter, (ack) => {
+    broadcastAck(ack);
+  });
+
+  // Register command handlers
+  const vuosExe = path.resolve(VUOS_DIR, "..", "..", "..", "Vu One.exe");
+
+  commandProcessor.registerCommand({
+    type: "START_VUOS",
+    requiresLease: true,
+    localBypass: true,
+    handler: async () => {
+      console.log("[watchdog] Start Vu One OS requested");
+      Bun.spawn([vuosExe], { cwd: path.dirname(vuosExe), stdio: ["ignore", "ignore", "ignore"] });
+      console.log("[watchdog] Vu One OS launched");
+      return { message: "Vu One OS launched", details: {} };
+    },
+  });
+
+  commandProcessor.registerCommand({
+    type: "RESTART_VUOS",
+    requiresLease: true,
+    localBypass: true,
+    handler: async () => {
+      console.log("[watchdog] Restart Vu One OS requested");
+      Bun.spawn(["taskkill", "/F", "/IM", "Vu One.exe"], { stdio: ["ignore", "ignore", "ignore"] });
+      await new Promise((r) => setTimeout(r, 2000));
+      Bun.spawn([vuosExe], { cwd: path.dirname(vuosExe), stdio: ["ignore", "ignore", "ignore"] });
+      console.log("[watchdog] Vu One OS relaunched");
+      eventEmitter.emitLifecycle("VUOS_RESTARTED", "WARN", {});
+      return { message: "Vu One OS restarted", details: {} };
+    },
+  });
+
+  commandProcessor.registerCommand({
+    type: "STOP_VUOS",
+    requiresLease: true,
+    localBypass: false,
+    handler: async () => {
+      console.log("[watchdog] Stop Vu One OS requested");
+      Bun.spawn(["taskkill", "/F", "/IM", "Vu One.exe"], { stdio: ["ignore", "ignore", "ignore"] });
+      return { message: "Vu One OS stopped", details: {} };
+    },
+  });
+
+  commandProcessor.registerCommand({
+    type: "QUIT_WATCHDOG",
+    requiresLease: true,
+    localBypass: false,
+    handler: async () => {
+      console.log("[watchdog] Quit requested");
+      setShuttingDown(true);
+      eventEmitter.emitLifecycle("WATCHDOG_SHUTTING_DOWN", "INFO", {});
+      setTimeout(() => process.exit(0), 500);
+      return { message: "Watchdog shutting down", details: {} };
+    },
+  });
+
+  commandProcessor.registerCommand({
+    type: "SWITCH_BROKER",
+    requiresLease: true,
+    localBypass: false,
+    handler: async (args) => {
+      const brokerId = args.brokerId;
+      if (!brokerId) throw new Error("Missing brokerId");
+      const oldBrokerId = (await import("./mqtt")).getActiveBrokerId();
+      eventEmitter.emitLifecycle("BROKER_SWITCHED", "WARN", { from: oldBrokerId, to: brokerId, reason: "manual" });
+      await switchBroker(brokerId);
+      return { message: `Switched to broker ${brokerId}`, details: { brokerId } };
+    },
+  });
+
+  commandProcessor.registerCommand({
+    type: "REQUEST_TELEMETRY",
+    requiresLease: false,
+    localBypass: true,
+    handler: async () => {
+      const data = snapshot(wallId);
+      publishTelemetry(wallId, data);
+      updateTelemetry(data);
+      return { message: "Telemetry published", details: {} };
+    },
+  });
+
+  commandProcessor.registerCommand({
+    type: "REQUEST_CONFIG",
+    requiresLease: false,
+    localBypass: true,
+    handler: async () => {
+      const configs = readConfigs();
+      publishConfig(wallId, configs);
+      return { message: "Config published", details: {} };
+    },
+  });
+
+  // Wire command processor to server
+  setCommandProcessor(commandProcessor);
 
   // Start background polling for slow collectors
   startSystemPolling();
   startNetworkPolling(config.httpPort);
   startAppPolling();
 
+  // Emit lifecycle event (before MQTT — will be buffered)
+  eventEmitter.emitLifecycle("WATCHDOG_STARTED", "INFO", { wallId });
+
   // Wait a moment for initial polls to populate caches
   await new Promise((r) => setTimeout(r, 3000));
 
+  // --- Connect MQTT with unified message handler ---
   console.log("[watchdog] Connecting to MQTT broker...");
-  await connectMqtt(config.wallId, (action) => {
-    switch (action) {
-      case "restart-vuos":
-        handleRestart();
-        break;
-      case "quit":
-        console.log("[watchdog] Quit requested via MQTT control");
-        process.exit(0);
-        break;
-      default:
-        console.log(`[watchdog] Unknown control action: ${action}`);
-    }
+
+  await connectMqtt(wallId, (topic, payload) => {
+    try {
+      const msg = JSON.parse(payload.toString());
+
+      // New command plane: watchdog/{wallId}/command/{clientId}
+      const commandPrefix = `watchdog/${wallId}/command/`;
+      if (topic.startsWith(commandPrefix)) {
+        const clientId = topic.slice(commandPrefix.length);
+        commandProcessor.handle(msg as CommandPayload, clientId, false);
+        return;
+      }
+
+      // Lease updates: watchdog/{wallId}/lease
+      if (topic === TOPICS.lease(wallId)) {
+        leaseManager.update(msg as LeasePayload);
+        return;
+      }
+
+      // Legacy control: watchdog/{wallId}/control
+      if (topic === TOPICS.control(wallId)) {
+        commandProcessor.handleLegacy(msg);
+        return;
+      }
+    } catch {}
   });
+
   console.log("[watchdog] MQTT connected");
+  eventEmitter.emitLifecycle("BROKER_CONNECTED", "INFO", {});
 
   const client = getActiveClient();
   if (client) {
@@ -101,39 +221,62 @@ async function main() {
   }
 
   // Start local dashboard server
-  startServer(config.wallId);
+  startServer(wallId);
 
   // Launch system tray icon
-  startTray(config.wallId);
+  startTray(wallId);
 
   // Start OSC listener — forwards commands to MQTT + local dashboard
   const oscPort = getOscPort();
   startOscListener((command) => {
     broadcastCommand(command);
-    publishCommand(config.wallId, command);
+    publishCommand(wallId, command);
   }, oscPort);
 
   // Publish config (retained) — refresh every 60s
   function pubConfig() {
     const configs = readConfigs();
-    publishConfig(config.wallId, configs);
+    publishConfig(wallId, configs);
   }
   pubConfig();
   setInterval(pubConfig, 60_000);
   console.log("[watchdog] Published config");
 
   // Initial publish
-  const data = snapshot(config.wallId);
-  publishTelemetry(config.wallId, data);
+  const data = snapshot(wallId);
+  publishTelemetry(wallId, data);
   console.log("[watchdog] Published initial telemetry");
   console.log(JSON.stringify(data, null, 2));
 
-  // Realtime publish loop — every 2s
+  // --- Main 2s loop ---
+  let previousMode = computeMode(evaluateConditions(data));
+
   setInterval(() => {
     try {
-      const data = snapshot(config.wallId);
-      publishTelemetry(config.wallId, data);
-      updateTelemetry(data);
+      const telemetry = snapshot(wallId);
+
+      // Evaluate conditions and compute mode
+      const conditions = evaluateConditions(telemetry);
+      const mode = computeMode(conditions);
+
+      // Edge-trigger events from condition changes
+      eventEmitter.updateConditions(conditions);
+      eventEmitter.updateMode(mode);
+
+      // Build health summary
+      const health = buildHealth(wallId, telemetry, mode, conditions);
+
+      // Log mode transitions
+      if (mode !== previousMode) {
+        console.log(`[health] Mode: ${previousMode} → ${mode}`);
+        previousMode = mode;
+      }
+
+      // Publish
+      publishTelemetry(wallId, telemetry);   // NOT retained
+      publishHealth(wallId, health);          // retained
+      updateTelemetry(telemetry);             // WebSocket
+      broadcastHealth(health);                // WebSocket
     } catch (err: any) {
       console.error("[watchdog] Error publishing:", err.message);
     }
