@@ -65,6 +65,29 @@ export function startServer(wallId: string) {
         return undefined;
       }
 
+      // Start Vu One OS (launch only, no kill)
+      if (url.pathname === "/api/start-vuos" && req.method === "POST") {
+        console.log("[watchdog] Start Vu One OS requested from dashboard");
+        try {
+          const vuosExe = path.resolve(VUOS_DIR, "..", "..", "..", "Vu One.exe");
+          console.log("[watchdog] Launching:", vuosExe);
+          Bun.spawn([vuosExe], {
+            cwd: path.dirname(vuosExe),
+            stdio: ["ignore", "ignore", "ignore"],
+          });
+          console.log("[watchdog] Vu One OS launched");
+          return new Response(JSON.stringify({ ok: true }), {
+            headers: { "Content-Type": "application/json" },
+          });
+        } catch (e: any) {
+          console.error("[watchdog] Failed to launch Vu One:", e.message);
+          return new Response(JSON.stringify({ ok: false, error: e.message }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+      }
+
       // Restart Vu One OS
       if (url.pathname === "/api/restart-vuos" && req.method === "POST") {
         console.log("[watchdog] Restart Vu One OS requested from dashboard");

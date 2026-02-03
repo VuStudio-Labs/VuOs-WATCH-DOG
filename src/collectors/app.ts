@@ -13,6 +13,41 @@ let cachedVuosRunning = false;
 let cachedServerRunning = false;
 let cachedServerVersion = "unknown";
 let cachedLogs: LogMetrics = { recentErrorCount: 0, lastError: null, lastErrorTime: null };
+let cachedVuosMemoryMB: number | null = null;
+
+// --- Crash detection ---
+let cachedCrashCount = 0;
+let lastKnownPid: number | null = null;
+let crashCountDate: string = new Date().toDateString();
+
+async function getProcessInfo(name: string): Promise<{ running: boolean; pid: number | null; memoryMB: number | null }> {
+  try {
+    const proc = Bun.spawn([
+      "powershell",
+      "-NoProfile",
+      "-Command",
+      `$p = Get-Process -Name '${name}' -ErrorAction SilentlyContinue | Select-Object -First 1; if ($p) { Write-Output "$($p.Id)|$($p.WorkingSet64)" } else { Write-Output "none" }`,
+    ]);
+    const output = await new Response(proc.stdout).text();
+    await proc.exited;
+
+    const trimmed = output.trim();
+    if (trimmed === "none" || !trimmed) {
+      return { running: false, pid: null, memoryMB: null };
+    }
+
+    const parts = trimmed.split("|");
+    const pid = parseInt(parts[0], 10);
+    const memBytes = parseInt(parts[1], 10);
+    return {
+      running: true,
+      pid: isNaN(pid) ? null : pid,
+      memoryMB: isNaN(memBytes) ? null : Math.round(memBytes / (1024 * 1024)),
+    };
+  } catch {
+    return { running: false, pid: null, memoryMB: null };
+  }
+}
 
 async function isProcessRunning(name: string): Promise<boolean> {
   try {
@@ -102,12 +137,30 @@ function readRecentErrors(): LogMetrics {
 }
 
 async function refreshProcesses() {
-  const [vuos, server] = await Promise.all([
-    isProcessRunning("Vu One"),
-    isProcessRunning("Vu_OS_Server*"),
-  ]);
-  cachedVuosRunning = vuos;
-  cachedServerRunning = server;
+  // Get Vu One info (PID + memory) in a single call
+  const vuosInfo = await getProcessInfo("Vu One");
+  cachedVuosRunning = vuosInfo.running;
+  cachedVuosMemoryMB = vuosInfo.memoryMB;
+
+  // Crash detection: PID changed while process is running
+  const today = new Date().toDateString();
+  if (today !== crashCountDate) {
+    cachedCrashCount = 0;
+    crashCountDate = today;
+  }
+
+  if (vuosInfo.running && vuosInfo.pid !== null) {
+    if (lastKnownPid !== null && vuosInfo.pid !== lastKnownPid) {
+      cachedCrashCount++;
+      console.log(`[app] Vu One OS crash detected (PID changed: ${lastKnownPid} → ${vuosInfo.pid}), count today: ${cachedCrashCount}`);
+    }
+    lastKnownPid = vuosInfo.pid;
+  } else if (!vuosInfo.running) {
+    // Process is down — don't reset lastKnownPid so we detect the restart
+  }
+
+  // Server check (separate because of wildcard name)
+  cachedServerRunning = await isProcessRunning("Vu_OS_Server*");
 }
 
 function refreshVersion() {
@@ -139,6 +192,8 @@ export function collectApp(): AppMetrics {
     vuosProcessRunning: cachedVuosRunning,
     serverProcessRunning: cachedServerRunning,
     serverVersion: cachedServerVersion,
+    vuosMemoryMB: cachedVuosMemoryMB,
+    crashCountToday: cachedCrashCount,
     serverLock: readServerLock(),
     logs: cachedLogs,
   };

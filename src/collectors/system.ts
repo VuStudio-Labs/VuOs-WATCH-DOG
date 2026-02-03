@@ -1,5 +1,5 @@
 import * as os from "os";
-import type { SystemMetrics } from "../types";
+import type { SystemMetrics, EventLogMetrics } from "../types";
 
 // --- Cached slow metrics with background refresh ---
 
@@ -17,9 +17,18 @@ interface DiskInfo {
   percent: number;
 }
 
+interface DiskIO {
+  readMBps: number;
+  writeMBps: number;
+}
+
 let cachedCpu = 0;
 let cachedGpu: GpuInfo = { name: null, usage: null, memUsedMB: null, memTotalMB: null, temp: null };
 let cachedDisk: DiskInfo = { totalMB: 0, usedMB: 0, percent: 0 };
+let cachedDiskIO: DiskIO = { readMBps: 0, writeMBps: 0 };
+let cachedThermalThrottling = false;
+let cachedPendingUpdates = 0;
+let cachedEventLog: EventLogMetrics = { count: 0, lastMessage: null, lastTime: null };
 
 // Continuous CPU sampling — keeps a rolling measurement without blocking
 let prevCpuTimes: { idle: number; total: number } | null = null;
@@ -183,6 +192,80 @@ async function refreshDisk() {
   } catch {}
 }
 
+async function refreshDiskIO() {
+  try {
+    const proc = Bun.spawn([
+      "powershell",
+      "-NoProfile",
+      "-Command",
+      `$c = Get-Counter '\\PhysicalDisk(_Total)\\Disk Read Bytes/sec','\\PhysicalDisk(_Total)\\Disk Write Bytes/sec' -ErrorAction Stop; $r = $c.CounterSamples[0].CookedValue; $w = $c.CounterSamples[1].CookedValue; Write-Output "$([math]::Round($r/1MB,1))|$([math]::Round($w/1MB,1))"`,
+    ]);
+    const output = await new Response(proc.stdout).text();
+    await proc.exited;
+
+    const parts = output.trim().split("|");
+    if (parts.length >= 2) {
+      cachedDiskIO = {
+        readMBps: parseFloat(parts[0]) || 0,
+        writeMBps: parseFloat(parts[1]) || 0,
+      };
+    }
+  } catch {}
+}
+
+async function refreshThermalThrottling() {
+  try {
+    const proc = Bun.spawn([
+      "powershell",
+      "-NoProfile",
+      "-Command",
+      `$c = Get-Counter '\\Processor Information(_Total)\\% Processor Performance' -ErrorAction Stop; Write-Output $c.CounterSamples[0].CookedValue`,
+    ]);
+    const output = await new Response(proc.stdout).text();
+    await proc.exited;
+
+    const cpuPerf = parseFloat(output.trim());
+    const gpuThrottling = cachedGpu.temp !== null && cachedGpu.temp > 90;
+    cachedThermalThrottling = (!isNaN(cpuPerf) && cpuPerf < 95) || gpuThrottling;
+  } catch {}
+}
+
+async function refreshPendingUpdates() {
+  try {
+    const proc = Bun.spawn([
+      "powershell",
+      "-NoProfile",
+      "-Command",
+      `try { $s = New-Object -ComObject Microsoft.Update.Session; $u = $s.CreateUpdateSearcher().Search('IsInstalled=0').Updates.Count; Write-Output $u } catch { Write-Output 0 }`,
+    ]);
+    const output = await new Response(proc.stdout).text();
+    await proc.exited;
+
+    cachedPendingUpdates = parseInt(output.trim(), 10) || 0;
+  } catch {}
+}
+
+async function refreshEventLog() {
+  try {
+    const proc = Bun.spawn([
+      "powershell",
+      "-NoProfile",
+      "-Command",
+      `$evts = Get-WinEvent -FilterHashtable @{LogName='Application';Level=1,2;StartTime=(Get-Date).AddHours(-1)} -MaxEvents 10 -ErrorAction SilentlyContinue; if ($evts) { $c = $evts.Count; $last = $evts[0]; Write-Output "$c|$($last.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss'))|$($last.Message.Substring(0,[math]::Min(200,$last.Message.Length)))" } else { Write-Output "0||" }`,
+    ]);
+    const output = await new Response(proc.stdout).text();
+    await proc.exited;
+
+    const parts = output.trim().split("|");
+    const count = parseInt(parts[0], 10) || 0;
+    cachedEventLog = {
+      count,
+      lastTime: parts[1] && parts[1].trim() ? parts[1].trim() : null,
+      lastMessage: parts[2] && parts[2].trim() ? parts[2].trim().substring(0, 200) : null,
+    };
+  } catch {}
+}
+
 /** Start background polling loops for slow collectors */
 export function startSystemPolling() {
   // CPU: sample every 2s (non-blocking, just reads os.cpus())
@@ -196,6 +279,22 @@ export function startSystemPolling() {
   // Disk: refresh every 60s
   refreshDisk();
   setInterval(refreshDisk, 60_000);
+
+  // Disk I/O: refresh every 5s
+  refreshDiskIO();
+  setInterval(refreshDiskIO, 5_000);
+
+  // Thermal throttling: refresh every 10s
+  refreshThermalThrottling();
+  setInterval(refreshThermalThrottling, 10_000);
+
+  // Pending updates: refresh every 5 min (slow COM call)
+  refreshPendingUpdates();
+  setInterval(refreshPendingUpdates, 300_000);
+
+  // Windows Event Log: refresh every 60s
+  refreshEventLog();
+  setInterval(refreshEventLog, 60_000);
 }
 
 /** Fast snapshot from cached values + instant reads */
@@ -220,6 +319,11 @@ export function collectSystem(): SystemMetrics {
     diskTotalMB: cachedDisk.totalMB,
     diskUsedMB: cachedDisk.usedMB,
     diskPercent: cachedDisk.percent,
+    diskReadMBps: cachedDiskIO.readMBps,
+    diskWriteMBps: cachedDiskIO.writeMBps,
+    thermalThrottling: cachedThermalThrottling,
+    pendingUpdates: cachedPendingUpdates,
+    eventLog: cachedEventLog,
     uptime: Math.round(os.uptime()),
   };
 }

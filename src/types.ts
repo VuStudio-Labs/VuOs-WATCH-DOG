@@ -1,3 +1,9 @@
+export interface EventLogMetrics {
+  count: number;
+  lastMessage: string | null;
+  lastTime: string | null;
+}
+
 export interface SystemMetrics {
   cpuUsage: number;
   cpuModel: string;
@@ -13,6 +19,11 @@ export interface SystemMetrics {
   diskTotalMB: number;
   diskUsedMB: number;
   diskPercent: number;
+  diskReadMBps: number;
+  diskWriteMBps: number;
+  thermalThrottling: boolean;
+  pendingUpdates: number;
+  eventLog: EventLogMetrics;
   uptime: number;
 }
 
@@ -41,6 +52,8 @@ export interface AppMetrics {
   vuosProcessRunning: boolean;
   serverProcessRunning: boolean;
   serverVersion: string;
+  vuosMemoryMB: number | null;
+  crashCountToday: number;
   serverLock: ServerLockInfo;
   logs: LogMetrics;
 }

@@ -66,9 +66,15 @@ All collectors run background polling loops and cache their results. The main lo
 | RAM used/total | `os.totalmem()` / `os.freemem()` | instant |
 | GPU name, usage, VRAM, temp | nvidia-smi or WMI | 5s |
 | Disk used/total | PowerShell WMI | 60s |
+| Disk I/O (read/write MB/s) | `Get-Counter PhysicalDisk` | 5s |
+| Thermal throttling | `Get-Counter % Processor Performance` + GPU temp | 10s |
+| Pending Windows updates | `Microsoft.Update.Session` COM | 5 min |
+| Event log errors (1h) | `Get-WinEvent` Application Critical+Error | 60s |
 | Uptime | `os.uptime()` | instant |
 
 **GPU detection strategy** — on first poll, tries nvidia-smi. If that fails, falls back to PowerShell WMI queries (`Win32_VideoController`, `GPUPerformanceCounters`, `MSAcpi_ThermalZoneTemperature`). Once a strategy works, it locks in and stops probing.
+
+**Thermal throttling** — detected when CPU processor performance drops below 95% (frequency scaling due to heat/power limits) or GPU temperature exceeds 90°C.
 
 ### Network Collector (`src/collectors/network.ts`)
 
@@ -84,11 +90,15 @@ All collectors run background polling loops and cache their results. The main lo
 | Metric | Source | Interval |
 |--------|--------|----------|
 | Vu One process running | PowerShell `Get-Process` | 5s |
+| Vu One memory (MB) | `Get-Process` WorkingSet64 | 5s |
+| Crash count today | PID change detection | 5s |
 | Server process running | PowerShell `Get-Process` | 5s |
 | Server version | `~/vu-one-server/package.json` | 60s |
 | Lock file health | `VUOS_DIR/vu-server.lock` | instant |
 | Recent error count | `VUOS_DIR/logs/error.log` tail | 10s |
 | Last error message/time | `VUOS_DIR/logs/error.log` tail | 10s |
+
+**Crash detection** — tracks the PID of `Vu One.exe`. If the process is running and the PID differs from the last known PID, a crash/restart is counted. The counter resets at midnight.
 
 ### OSC Listener (`src/collectors/osc.ts`)
 
@@ -200,6 +210,7 @@ Subscribe to `watchdog/{wallId}/control` to send commands to the watchdog remote
 |--------|------|-------------|
 | GET | `/` | Dashboard HTML |
 | GET | `/ws` | WebSocket upgrade |
+| POST | `/api/start-vuos` | Launch Vu One.exe (when not running) |
 | POST | `/api/restart-vuos` | Kill and relaunch Vu One.exe |
 | POST | `/api/switch-broker` | Switch MQTT broker `{brokerId}` |
 | POST | `/api/quit` | Exit watchdog process |
@@ -222,7 +233,7 @@ Single HTML file embedded in the executable at build time.
 **Local mode** — when accessed at `localhost:3200`:
 - Connects via WebSocket (no MQTT in browser)
 - Shows broker dropdown (switches server-side broker)
-- Shows Restart Vu OS and Kill Watchdog buttons
+- Shows Start Vu OS (green, when not running) or Restart Vu OS (blue, when running) and Kill Watchdog buttons
 - Hides Wall ID input and Connect button
 
 **Remote mode** — when opened as a file or from another origin:
@@ -233,11 +244,13 @@ Single HTML file embedded in the executable at build time.
 
 ### Panels
 
-- **System Health** — CPU, RAM, GPU, disk, uptime with real-time charts
+- **System Health** — CPU, RAM, GPU, disk (usage + I/O), uptime with real-time charts
+- **System Health (extended)** — thermal throttling, pending Windows updates, Windows Event Log errors (last hour)
 - **Network Status** — internet connectivity, latency, local server, peers
-- **Application Status** — process status, server version, lock file health, error log
+- **Application Status** — process status, memory usage, crash count today, server version, lock file health, error log
 - **OSC Command Log** — live stream of OSC messages from Vu One OS
 - **Configuration Viewer** — app.config and system.config contents
+- **Controls** — Start/Restart Vu OS (context-aware), broker switcher, Kill Watchdog
 
 ## System Tray
 
@@ -272,10 +285,10 @@ The build compiles all TypeScript + embedded HTML into a single portable `.exe` 
 
 ```typescript
 {
-  timestamp: number;          // Unix ms
+  timestamp: number;              // Unix ms
   wallId: string;
   system: {
-    cpuUsage: number;         // percentage
+    cpuUsage: number;             // percentage
     cpuModel: string;
     cpuCores: number;
     ramTotalMB: number;
@@ -285,11 +298,20 @@ The build compiles all TypeScript + embedded HTML into a single portable `.exe` 
     gpuUsage: number | null;
     gpuMemUsedMB: number | null;
     gpuMemTotalMB: number | null;
-    gpuTemp: number | null;
+    gpuTemp: number | null;       // Celsius
     diskTotalMB: number;
     diskUsedMB: number;
     diskPercent: number;
-    uptime: number;           // seconds
+    diskReadMBps: number;         // MB/s
+    diskWriteMBps: number;        // MB/s
+    thermalThrottling: boolean;   // CPU perf < 95% or GPU > 90°C
+    pendingUpdates: number;       // Windows updates waiting
+    eventLog: {
+      count: number;              // Critical+Error events in last hour
+      lastMessage: string | null;
+      lastTime: string | null;
+    };
+    uptime: number;               // seconds
   };
   network: {
     internetOnline: boolean;
@@ -301,6 +323,8 @@ The build compiles all TypeScript + embedded HTML into a single portable `.exe` 
     vuosProcessRunning: boolean;
     serverProcessRunning: boolean;
     serverVersion: string;
+    vuosMemoryMB: number | null;  // Vu One.exe working set
+    crashCountToday: number;      // PID change count since midnight
     serverLock: {
       pid: number;
       startTime: number;

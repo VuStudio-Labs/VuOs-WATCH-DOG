@@ -200,6 +200,7 @@
       <span class="data-points" id="dataPoints"></span>
       <div class="status-dot" id="statusDot"></div>
       <span id="statusText">Disconnected</span>
+      <button id="startBtn" onclick="startVuos()" style="display:none;margin-left:8px;padding:4px 12px;font-size:12px;background:#16a34a;color:#fff;border:1px solid #15803d;border-radius:6px;cursor:pointer;font-weight:600;">Start Vu OS</button>
       <button id="restartBtn" onclick="restartVuos()" style="display:none;margin-left:8px;padding:4px 12px;font-size:12px;background:#2563eb;color:#fff;border:1px solid #1d4ed8;border-radius:6px;cursor:pointer;font-weight:600;">Restart Vu OS</button>
       <button id="killBtn" onclick="killWatchdog()" style="display:none;margin-left:8px;padding:4px 12px;font-size:12px;background:#dc2626;color:#fff;border:1px solid #991b1b;border-radius:6px;cursor:pointer;font-weight:600;">Kill Watchdog</button>
     </div>
@@ -277,6 +278,34 @@
           <span class="metric-label">Used / Total</span>
           <span class="metric-value" id="diskUsage">—</span>
         </div>
+        <div class="metric-row" style="margin-top:8px;">
+          <span class="metric-label">Disk I/O</span>
+          <span class="metric-value" id="diskIO">—</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">System Health</div>
+        <div class="metric-row">
+          <span class="metric-label">Thermal Throttling</span>
+          <span class="metric-value" id="sysThrottle">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Pending Updates</span>
+          <span class="metric-value" id="sysPendingUpdates">0</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Event Log Errors (1h)</span>
+          <span class="metric-value" id="sysEventCount">0</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Last Event</span>
+          <span class="metric-value" id="sysEventTime" style="font-size:11px;">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Event Message</span>
+          <span class="metric-value" id="sysEventMsg" style="font-size:10px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">—</span>
+        </div>
       </div>
 
       <div class="card" id="networkConfigCard">
@@ -338,6 +367,14 @@
         <div class="metric-row">
           <span class="metric-label">Server Process</span>
           <span class="metric-value" id="appServer">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">VUOS Memory</span>
+          <span class="metric-value" id="appMemory">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Crashes Today</span>
+          <span class="metric-value" id="appCrashes">0</span>
         </div>
         <div class="metric-row">
           <span class="metric-label">Server Version</span>
@@ -1469,6 +1506,20 @@
       setText('diskPercent', s.diskPercent);
       setBar('diskBar', s.diskPercent);
       setText('diskUsage', formatGB(s.diskUsedMB) + ' / ' + formatGB(s.diskTotalMB));
+      setText('diskIO', 'R: ' + (s.diskReadMBps || 0) + ' MB/s  W: ' + (s.diskWriteMBps || 0) + ' MB/s');
+
+      // System Health
+      var throttleEl = document.getElementById('sysThrottle');
+      throttleEl.textContent = s.thermalThrottling ? 'YES' : 'No';
+      throttleEl.style.color = s.thermalThrottling ? '#ef4444' : '#22c55e';
+      var updEl = document.getElementById('sysPendingUpdates');
+      updEl.textContent = s.pendingUpdates || 0;
+      updEl.style.color = s.pendingUpdates > 0 ? '#f59e0b' : '#a3a3a3';
+      var evtEl = document.getElementById('sysEventCount');
+      evtEl.textContent = (s.eventLog && s.eventLog.count) || 0;
+      evtEl.style.color = s.eventLog && s.eventLog.count > 0 ? '#ef4444' : '#a3a3a3';
+      setText('sysEventTime', s.eventLog && s.eventLog.lastTime ? s.eventLog.lastTime : '—');
+      setText('sysEventMsg', s.eventLog && s.eventLog.lastMessage ? s.eventLog.lastMessage : '—');
 
       setOnline('netOnline', n.internetOnline);
       setText('netLatency', n.latencyMs + ' ms');
@@ -1477,6 +1528,14 @@
 
       setOnline('appVuos', a.vuosProcessRunning);
       setOnline('appServer', a.serverProcessRunning);
+      setText('appMemory', a.vuosMemoryMB != null ? formatMB(a.vuosMemoryMB) : '—');
+      var crashEl = document.getElementById('appCrashes');
+      crashEl.textContent = a.crashCountToday || 0;
+      crashEl.style.color = a.crashCountToday > 0 ? '#ef4444' : '#a3a3a3';
+      if (isLocal) {
+        document.getElementById('startBtn').style.display = a.vuosProcessRunning ? 'none' : '';
+        document.getElementById('restartBtn').style.display = a.vuosProcessRunning ? '' : 'none';
+      }
       setText('appVersion', a.serverVersion || '—');
       setText('wallId', d.wallId || '—');
       setText('lastUpdate', new Date(d.timestamp).toLocaleTimeString());
@@ -1607,6 +1666,23 @@
       localWs.onerror = function() {
         localWs.close();
       };
+    }
+
+    function startVuos() {
+      var btn = document.getElementById('startBtn');
+      btn.textContent = 'Starting...';
+      btn.disabled = true;
+      fetch('/api/start-vuos', { method: 'POST' })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (data.ok) {
+            setTimeout(function() { btn.textContent = 'Start Vu OS'; btn.disabled = false; }, 5000);
+          } else {
+            alert('Failed: ' + (data.error || 'unknown'));
+            btn.textContent = 'Start Vu OS'; btn.disabled = false;
+          }
+        })
+        .catch(function() { btn.textContent = 'Start Vu OS'; btn.disabled = false; });
     }
 
     function restartVuos() {
