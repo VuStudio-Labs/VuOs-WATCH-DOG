@@ -132,6 +132,41 @@ The dashboard has a **Broker dropdown** that triggers `POST /api/switch-broker` 
 4. Subscribes to control topic on the new broker
 5. Broadcasts `broker-switched` event to all dashboard WebSocket clients
 
+### MQTT Namespace Diagram
+
+The EMQX broker is shared with Vu Studio. Each system uses its own top-level namespace:
+
+```
+EMQX Cloud Broker
+│
+├── player/{wallId}/              ← Vu Studio (existing)
+│   ├── status                       online/offline
+│   ├── commands                     playback, scene, asset control
+│   ├── media                        media sync
+│   └── ...
+│
+└── watchdog/{wallId}/            ← Vu Watchdog
+    ├── telemetry                    system/network/app metrics (2s)
+    ├── status                       online/offline (LWT)
+    ├── config                       app + system config (60s)
+    ├── commands                     OSC command stream (real-time)
+    └── control                      inbound: restart-vuos, quit
+```
+
+Example for Wall ID `5538`:
+
+```
+watchdog/5538/telemetry   ← CPU 16%, RAM 62%, GPU 8%, disk 84%
+watchdog/5538/status      ← {"status": "online", "wallId": "5538"}
+watchdog/5538/config      ← {appConfig: {...}, systemConfig: {...}}
+watchdog/5538/commands    ← {"address": "/VuOne/position", "args": [0.5]}
+watchdog/5538/control     → {"action": "restart-vuos"}
+```
+
+Direction key:
+- `←` published by watchdog (outbound)
+- `→` received by watchdog (inbound)
+
 ### Topics
 
 All topics use the namespace `watchdog/{wallId}/`:
