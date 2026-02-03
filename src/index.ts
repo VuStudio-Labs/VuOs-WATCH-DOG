@@ -1,13 +1,14 @@
 import { hideConsole } from "./console";
 import { startTray } from "./tray";
-import { loadConfig, readConfigs } from "./config";
-import { connectMqtt, publishTelemetry, TOPICS } from "./mqtt";
+import { loadConfig, readConfigs, getOscPort, VUOS_DIR } from "./config";
+import { connectMqtt, publishTelemetry, publishConfig, publishCommand, TOPICS } from "./mqtt";
 import { startSystemPolling, collectSystem } from "./collectors/system";
 import { startNetworkPolling, collectNetwork } from "./collectors/network";
 import { startAppPolling, collectApp } from "./collectors/app";
 import { startOscListener } from "./collectors/osc";
 import { startServer, updateTelemetry, broadcastCommand } from "./server";
 import type { TelemetryPayload } from "./types";
+import * as path from "path";
 
 const PUBLISH_INTERVAL_MS = 2_000;
 
@@ -21,7 +22,42 @@ function snapshot(wallId: string): TelemetryPayload {
   };
 }
 
+function handleRestart() {
+  console.log("[watchdog] Restart Vu One OS requested via MQTT control");
+  Bun.spawn(["taskkill", "/F", "/IM", "Vu One.exe"], {
+    stdio: ["ignore", "ignore", "ignore"],
+  });
+  const vuosExe = path.resolve(VUOS_DIR, "..", "..", "..", "Vu One.exe");
+  setTimeout(() => {
+    try {
+      Bun.spawn([vuosExe], {
+        cwd: path.dirname(vuosExe),
+        stdio: ["ignore", "ignore", "ignore"],
+      });
+      console.log("[watchdog] Vu One OS relaunched");
+    } catch (e: any) {
+      console.error("[watchdog] Failed to launch Vu One:", e.message);
+    }
+  }, 2000);
+}
+
+async function ensureSingleInstance() {
+  try {
+    await fetch("http://localhost:3200/ws", { signal: AbortSignal.timeout(1000) });
+    console.error("[watchdog] Another instance is already running on port 3200");
+    process.exit(1);
+  } catch (e: any) {
+    if (e.name === "ConnectError" || e.code === "ECONNREFUSED" || e.name === "TimeoutError") {
+      return;
+    }
+    return;
+  }
+}
+
 async function main() {
+  // Prevent multiple instances
+  await ensureSingleInstance();
+
   // Hide the console window immediately — tray menu can re-show it
   hideConsole();
 
@@ -39,15 +75,27 @@ async function main() {
   await new Promise((r) => setTimeout(r, 3000));
 
   console.log("[watchdog] Connecting to MQTT broker...");
-  const client = await connectMqtt(config.wallId);
+  const clients = await connectMqtt(config.wallId, (action) => {
+    switch (action) {
+      case "restart-vuos":
+        handleRestart();
+        break;
+      case "quit":
+        console.log("[watchdog] Quit requested via MQTT control");
+        process.exit(0);
+        break;
+      default:
+        console.log(`[watchdog] Unknown control action: ${action}`);
+    }
+  });
   console.log("[watchdog] MQTT connected");
 
-  client.on("error", (err) => {
-    console.error("[watchdog] MQTT error:", err.message);
+  clients.primary.on("error", (err) => {
+    console.error("[watchdog] MQTT primary error:", err.message);
   });
 
-  client.on("reconnect", () => {
-    console.log("[watchdog] MQTT reconnecting...");
+  clients.primary.on("reconnect", () => {
+    console.log("[watchdog] MQTT primary reconnecting...");
   });
 
   // Start local dashboard server
@@ -57,24 +105,24 @@ async function main() {
   startTray(config.wallId);
 
   // Start OSC listener — forwards commands to MQTT + local dashboard
-  startOscListener(config.wallId, client, broadcastCommand);
+  const oscPort = getOscPort();
+  startOscListener((command) => {
+    broadcastCommand(command);
+    publishCommand(clients, config.wallId, command);
+  }, oscPort);
 
   // Publish config (retained) — refresh every 60s
-  function publishConfig() {
+  function pubConfig() {
     const configs = readConfigs();
-    client.publish(
-      TOPICS.config(config.wallId),
-      JSON.stringify(configs),
-      { qos: 0, retain: true }
-    );
+    publishConfig(clients, config.wallId, configs);
   }
-  publishConfig();
-  setInterval(publishConfig, 60_000);
+  pubConfig();
+  setInterval(pubConfig, 60_000);
   console.log("[watchdog] Published config");
 
   // Initial publish
   const data = snapshot(config.wallId);
-  publishTelemetry(client, config.wallId, data);
+  publishTelemetry(clients, config.wallId, data);
   console.log("[watchdog] Published initial telemetry");
   console.log(JSON.stringify(data, null, 2));
 
@@ -82,7 +130,7 @@ async function main() {
   setInterval(() => {
     try {
       const data = snapshot(config.wallId);
-      publishTelemetry(client, config.wallId, data);
+      publishTelemetry(clients, config.wallId, data);
       updateTelemetry(data);
     } catch (err: any) {
       console.error("[watchdog] Error publishing:", err.message);

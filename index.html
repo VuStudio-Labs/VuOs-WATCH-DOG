@@ -200,12 +200,15 @@
       <span class="data-points" id="dataPoints"></span>
       <div class="status-dot" id="statusDot"></div>
       <span id="statusText">Disconnected</span>
+      <button id="restartBtn" onclick="restartVuos()" style="display:none;margin-left:8px;padding:4px 12px;font-size:12px;background:#2563eb;color:#fff;border:1px solid #1d4ed8;border-radius:6px;cursor:pointer;font-weight:600;">Restart Vu OS</button>
       <button id="killBtn" onclick="killWatchdog()" style="display:none;margin-left:8px;padding:4px 12px;font-size:12px;background:#dc2626;color:#fff;border:1px solid #991b1b;border-radius:6px;cursor:pointer;font-weight:600;">Kill Watchdog</button>
     </div>
   </div>
 
   <div class="controls">
-    <label>Wall ID:</label>
+    <label>Broker:</label>
+    <select id="brokerSelect" style="min-width:160px;"></select>
+    <label style="margin-left:8px;">Wall ID:</label>
     <input type="text" id="wallIdInput" value="5538" style="width: 120px;" placeholder="e.g. 5538" />
     <button id="connectBtn" onclick="toggleConnection()">Connect</button>
     <label style="margin-left:12px;">History:</label>
@@ -904,15 +907,34 @@
       connect();
     }
 
+    function getSelectedBroker() {
+      var sel = document.getElementById('brokerSelect');
+      var idx = sel.selectedIndex;
+      if (idx < 0 || !window._mqttBrokers) return null;
+      return window._mqttBrokers[idx] || null;
+    }
+
+    function populateBrokerSelect() {
+      var sel = document.getElementById('brokerSelect');
+      sel.innerHTML = '';
+      var brokers = window._mqttBrokers || [];
+      brokers.forEach(function(b) {
+        var opt = document.createElement('option');
+        opt.textContent = b.label;
+        sel.appendChild(opt);
+      });
+    }
+
     function connect() {
       const wallId = document.getElementById('wallIdInput').value.trim();
       if (!wallId) return;
 
       setStatus('connecting');
 
-      var brokerUrl = (window._mqttBroker && window._mqttBroker.url) || 'wss://mqtt.vu.studio/mqtt';
-      var brokerUser = (window._mqttBroker && window._mqttBroker.username) || '';
-      var brokerPass = (window._mqttBroker && window._mqttBroker.password) || '';
+      var broker = getSelectedBroker();
+      var brokerUrl = (broker && broker.url) || 'wss://c9b6cc55.ala.us-east-1.emqxsl.com:8084/mqtt';
+      var brokerUser = (broker && broker.username) || '';
+      var brokerPass = (broker && broker.password) || '';
       var mqttOpts = {
         clientId: 'telemetry-monitor-' + Math.random().toString(36).slice(2, 8),
         reconnectPeriod: 5000,
@@ -920,7 +942,7 @@
       if (brokerUser) { mqttOpts.username = brokerUser; mqttOpts.password = brokerPass; }
       client = mqtt.connect(brokerUrl, mqttOpts);
 
-      const wildcardTopic = 'vu/' + wallId + '/#';
+      const wildcardTopic = 'watchdog/' + wallId + '/#';
 
       client.on('connect', () => {
         setStatus('connected');
@@ -928,7 +950,7 @@
         document.getElementById('dashboard').style.display = 'block';
         document.getElementById('emptyState').style.display = 'none';
         if (!cpuRamChart) initCharts();
-        addLog('Subscribed to ' + wildcardTopic + ' (wildcard)');
+        addLog('Subscribed to ' + wildcardTopic + ' via ' + (broker && broker.label || 'default'));
       });
 
       client.on('message', (t, payload) => {
@@ -944,7 +966,7 @@
         let topicType = 'other';
         if (t.endsWith('/commands')) topicType = 'commands';
         else if (t.endsWith('/config')) topicType = 'config';
-        else if (t.endsWith('/telemetry/health')) topicType = 'health';
+        else if (t.endsWith('/status')) topicType = 'health';
         else if (t.endsWith('/telemetry')) topicType = 'telemetry';
         topicBytes[topicType] += msgBytes;
         topicMsgs[topicType] += 1;
@@ -967,7 +989,7 @@
             handleCommand(data);
           } else if (t.endsWith('/config')) {
             handleConfig(data);
-          } else if (t.endsWith('/telemetry/health')) {
+          } else if (t.endsWith('/status')) {
             handleHealth(data);
           } else if (t.endsWith('/telemetry')) {
             messageCount++;
@@ -1253,8 +1275,13 @@
     let lastConfigJson = '';
 
     function handleConfig(data) {
-      // Stash MQTT broker config for remote connections
-      if (data.mqttBroker) window._mqttBroker = data.mqttBroker;
+      // Stash MQTT broker configs for remote connections
+      if (data.mqttBroker) {
+        var brokers = [data.mqttBroker.primary];
+        if (data.mqttBroker.secondary) brokers.push(data.mqttBroker.secondary);
+        window._mqttBrokers = brokers;
+        populateBrokerSelect();
+      }
 
       // Dedupe — config is retained + published every 60s
       const json = JSON.stringify(data);
@@ -1557,6 +1584,24 @@
       };
     }
 
+    function restartVuos() {
+      if (!confirm('Restart Vu One OS?')) return;
+      var btn = document.getElementById('restartBtn');
+      btn.textContent = 'Restarting...';
+      btn.disabled = true;
+      fetch('/api/restart-vuos', { method: 'POST' })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (data.ok) {
+            setTimeout(function() { btn.textContent = 'Restart Vu OS'; btn.disabled = false; }, 5000);
+          } else {
+            alert('Failed: ' + (data.error || 'unknown'));
+            btn.textContent = 'Restart Vu OS'; btn.disabled = false;
+          }
+        })
+        .catch(function() { alert('Failed to reach watchdog'); btn.textContent = 'Restart Vu OS'; btn.disabled = false; });
+    }
+
     function killWatchdog() {
       if (!confirm('Kill the watchdog process?')) return;
       fetch('/api/quit', { method: 'POST' })
@@ -1568,9 +1613,15 @@
     window.addEventListener('DOMContentLoaded', () => {
       if (isLocal) {
         document.querySelector('.controls').style.display = 'none';
+        document.getElementById('restartBtn').style.display = '';
         document.getElementById('killBtn').style.display = '';
         connectLocal();
       } else {
+        // Default broker list for remote mode
+        if (!window._mqttBrokers) {
+          window._mqttBrokers = [{ label: 'Vu Studio (EMQX)', url: 'wss://c9b6cc55.ala.us-east-1.emqxsl.com:8084/mqtt', username: 'dev', password: 'testing' }];
+          populateBrokerSelect();
+        }
         connect();
       }
     });

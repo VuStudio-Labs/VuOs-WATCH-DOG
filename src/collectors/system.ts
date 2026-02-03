@@ -42,7 +42,14 @@ function sampleCpu() {
   prevCpuTimes = { idle, total };
 }
 
-async function refreshGpu() {
+// GPU detection strategy:
+// 1. nvidia-smi  → full stats (NVIDIA)
+// 2. PowerShell WMI fallback → name, VRAM, usage via perf counters (AMD/Intel/any)
+// Once a strategy succeeds on first poll, it's locked in to avoid re-probing.
+
+let gpuStrategy: "nvidia" | "wmi" | null = null;
+
+async function refreshGpuNvidia(): Promise<boolean> {
   try {
     const proc = Bun.spawn([
       "nvidia-smi",
@@ -52,7 +59,7 @@ async function refreshGpu() {
     const output = await new Response(proc.stdout).text();
     const exitCode = await proc.exited;
 
-    if (exitCode !== 0 || !output.trim()) return;
+    if (exitCode !== 0 || !output.trim()) return false;
 
     const parts = output.trim().split(",").map((s) => s.trim());
     cachedGpu = {
@@ -62,7 +69,87 @@ async function refreshGpu() {
       memTotalMB: parts[3] ? parseInt(parts[3], 10) : null,
       temp: parts[4] ? parseInt(parts[4], 10) : null,
     };
-  } catch {}
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const WMI_GPU_SCRIPT = `
+$gpu = Get-CimInstance Win32_VideoController | Where-Object { $_.Status -eq 'OK' } | Select-Object -First 1
+if (-not $gpu) { exit 1 }
+$name = $gpu.Name
+$vramMB = [math]::Round($gpu.AdapterRAM / 1MB)
+
+# Try GPU usage via performance counters
+$usage = $null
+$temp = $null
+try {
+  $eng = Get-CimInstance Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine -ErrorAction Stop |
+    Where-Object { $_.Name -match 'engtype_3D' } |
+    Measure-Object -Property UtilizationPercentage -Maximum
+  if ($eng.Maximum) { $usage = [math]::Round($eng.Maximum) }
+} catch {}
+
+# Try temp via WMI thermal zone (works on some systems)
+try {
+  $thermal = Get-CimInstance MSAcpi_ThermalZoneTemperature -Namespace root/wmi -ErrorAction Stop |
+    Select-Object -First 1
+  if ($thermal) { $temp = [math]::Round(($thermal.CurrentTemperature - 2732) / 10) }
+} catch {}
+
+# Try dedicated GPU memory used via perf counters
+$memUsed = $null
+try {
+  $mem = Get-CimInstance Win32_PerfFormattedData_GPUPerformanceCounters_GPUAdapterMemory -ErrorAction Stop |
+    Select-Object -First 1
+  if ($mem.DedicatedUsage) { $memUsed = [math]::Round($mem.DedicatedUsage / 1MB) }
+} catch {}
+
+Write-Output "$name|$vramMB|$usage|$memUsed|$temp"
+`;
+
+async function refreshGpuWmi(): Promise<boolean> {
+  try {
+    const proc = Bun.spawn(["powershell", "-NoProfile", "-Command", WMI_GPU_SCRIPT]);
+    const output = await new Response(proc.stdout).text();
+    const exitCode = await proc.exited;
+
+    if (exitCode !== 0 || !output.trim()) return false;
+
+    const parts = output.trim().split("|").map((s) => s.trim());
+    cachedGpu = {
+      name: parts[0] || null,
+      memTotalMB: parts[1] && parts[1] !== "" ? parseInt(parts[1], 10) : null,
+      usage: parts[2] && parts[2] !== "" ? parseInt(parts[2], 10) : null,
+      memUsedMB: parts[3] && parts[3] !== "" ? parseInt(parts[3], 10) : null,
+      temp: parts[4] && parts[4] !== "" ? parseInt(parts[4], 10) : null,
+    };
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function refreshGpu() {
+  if (gpuStrategy === "nvidia") {
+    await refreshGpuNvidia();
+    return;
+  }
+  if (gpuStrategy === "wmi") {
+    await refreshGpuWmi();
+    return;
+  }
+
+  // First run: detect which strategy works
+  if (await refreshGpuNvidia()) {
+    gpuStrategy = "nvidia";
+    return;
+  }
+  if (await refreshGpuWmi()) {
+    gpuStrategy = "wmi";
+    return;
+  }
 }
 
 async function refreshDisk() {

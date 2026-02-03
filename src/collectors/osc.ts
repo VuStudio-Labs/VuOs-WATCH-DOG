@@ -1,8 +1,6 @@
 import * as dgram from "dgram";
-import type { MqttClient } from "mqtt";
-import { TOPICS } from "../mqtt";
 
-const OSC_PORT = 1231;
+const DEFAULT_OSC_PORT = 1231;
 
 interface OscMessage {
   address: string;
@@ -55,12 +53,10 @@ export type OscCommandCallback = (command: {
 }) => void;
 
 export function startOscListener(
-  wallId: string,
-  mqttClient: MqttClient,
-  onCommand?: OscCommandCallback
+  onCommand: OscCommandCallback,
+  port: number = DEFAULT_OSC_PORT
 ) {
   const sock = dgram.createSocket("udp4");
-  const topic = TOPICS.commands(wallId);
 
   sock.on("message", (msg) => {
     const parsed = parseOsc(msg);
@@ -69,22 +65,19 @@ export function startOscListener(
     // Skip userData — massive JSON blob with sensitive profile data
     if (parsed.address === "/VuOne/userData") return;
 
-    const command = {
+    onCommand({
       timestamp: Date.now(),
       address: parsed.address,
       args: parsed.args,
-    };
-
-    mqttClient.publish(topic, JSON.stringify(command), { qos: 0, retain: false });
-    onCommand?.(command);
+    });
   });
 
   sock.on("error", (err) => {
     console.error("[osc] error:", err.message);
   });
 
-  sock.bind(OSC_PORT, "0.0.0.0", () => {
-    console.log(`[osc] listening on :${OSC_PORT}`);
+  sock.bind(port, "0.0.0.0", () => {
+    console.log(`[osc] listening on :${port}`);
   });
 
   return sock;

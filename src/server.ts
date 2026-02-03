@@ -1,8 +1,9 @@
 import html from "../index.html" with { type: "text" };
 import type { TelemetryPayload } from "./types";
-import { readConfigs } from "./config";
+import { readConfigs, VUOS_DIR } from "./config";
 import { getMqttBrokerConfig } from "./mqtt";
 import type { ServerWebSocket } from "bun";
+import * as path from "path";
 
 const PORT = 3200;
 
@@ -62,6 +63,39 @@ export function startServer(wallId: string) {
           return new Response("WebSocket upgrade failed", { status: 400 });
         }
         return undefined;
+      }
+
+      // Restart Vu One OS
+      if (url.pathname === "/api/restart-vuos" && req.method === "POST") {
+        console.log("[watchdog] Restart Vu One OS requested from dashboard");
+        try {
+          // Kill existing process
+          Bun.spawn(["taskkill", "/F", "/IM", "Vu One.exe"], {
+            stdio: ["ignore", "ignore", "ignore"],
+          });
+          // Wait a moment then relaunch
+          const vuosExe = path.resolve(VUOS_DIR, "..", "..", "..", "Vu One.exe");
+          console.log("[watchdog] Will relaunch:", vuosExe);
+          setTimeout(() => {
+            try {
+              Bun.spawn([vuosExe], {
+                cwd: path.dirname(vuosExe),
+                stdio: ["ignore", "ignore", "ignore"],
+              });
+              console.log("[watchdog] Vu One OS relaunched");
+            } catch (e: any) {
+              console.error("[watchdog] Failed to launch Vu One:", e.message);
+            }
+          }, 2000);
+          return new Response(JSON.stringify({ ok: true }), {
+            headers: { "Content-Type": "application/json" },
+          });
+        } catch (e: any) {
+          return new Response(JSON.stringify({ ok: false, error: e.message }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
       }
 
       // Quit watchdog

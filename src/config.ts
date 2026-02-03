@@ -25,6 +25,18 @@ export const VUOS_DIR = detectVuosDir();
 const APP_CONFIG_PATH = path.join(VUOS_DIR, "app.config.json");
 const SYSTEM_CONFIG_PATH = path.join(VUOS_DIR, "system.config.json");
 
+/** Parse OSC port from system.config.json oscIp field (e.g. "10.150.10.201:1231") */
+export function getOscPort(): number {
+  try {
+    const raw = JSON.parse(fs.readFileSync(SYSTEM_CONFIG_PATH, "utf-8"));
+    if (raw.oscIp) {
+      const port = parseInt(raw.oscIp.split(":").pop(), 10);
+      if (port > 0) return port;
+    }
+  } catch {}
+  return 1231;
+}
+
 export function loadConfig(): AppConfig {
   const raw = fs.readFileSync(APP_CONFIG_PATH, "utf-8");
   const parsed = JSON.parse(raw);
