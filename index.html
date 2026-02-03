@@ -207,10 +207,10 @@
 
   <div class="controls">
     <label>Broker:</label>
-    <select id="brokerSelect" style="min-width:160px;"></select>
-    <label style="margin-left:8px;">Wall ID:</label>
+    <select id="brokerSelect" style="min-width:160px;" onchange="onBrokerSwitch()"></select>
+    <span id="remoteControls"><label style="margin-left:8px;">Wall ID:</label>
     <input type="text" id="wallIdInput" value="5538" style="width: 120px;" placeholder="e.g. 5538" />
-    <button id="connectBtn" onclick="toggleConnection()">Connect</button>
+    <button id="connectBtn" onclick="toggleConnection()">Connect</button></span>
     <label style="margin-left:12px;">History:</label>
     <select id="historyRange" onchange="updateChartRange()">
       <option value="0.5" selected>30 sec</option>
@@ -914,15 +914,42 @@
       return window._mqttBrokers[idx] || null;
     }
 
-    function populateBrokerSelect() {
+    function populateBrokerSelect(activeBrokerId) {
       var sel = document.getElementById('brokerSelect');
       sel.innerHTML = '';
       var brokers = window._mqttBrokers || [];
       brokers.forEach(function(b) {
         var opt = document.createElement('option');
+        opt.value = b.id;
         opt.textContent = b.label;
+        if (b.id === activeBrokerId) opt.selected = true;
         sel.appendChild(opt);
       });
+    }
+
+    function onBrokerSwitch() {
+      var sel = document.getElementById('brokerSelect');
+      var brokerId = sel.value;
+      if (!brokerId || !isLocal) return;
+      sel.disabled = true;
+      fetch('/api/switch-broker', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brokerId: brokerId })
+      })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          sel.disabled = false;
+          if (data.ok) {
+            addLog('Switched broker to ' + sel.options[sel.selectedIndex].textContent);
+          } else {
+            addLog('Broker switch failed: ' + (data.error || 'unknown'));
+          }
+        })
+        .catch(function(err) {
+          sel.disabled = false;
+          addLog('Broker switch error: ' + err.message);
+        });
     }
 
     function connect() {
@@ -1275,12 +1302,10 @@
     let lastConfigJson = '';
 
     function handleConfig(data) {
-      // Stash MQTT broker configs for remote connections
+      // Stash MQTT broker configs
       if (data.mqttBroker) {
-        var brokers = [data.mqttBroker.primary];
-        if (data.mqttBroker.secondary) brokers.push(data.mqttBroker.secondary);
-        window._mqttBrokers = brokers;
-        populateBrokerSelect();
+        window._mqttBrokers = data.mqttBroker.brokers || [];
+        populateBrokerSelect(data.mqttBroker.activeBrokerId);
       }
 
       // Dedupe — config is retained + published every 60s
@@ -1612,15 +1637,18 @@
     // Auto-connect on load — local WS if served from watchdog, MQTT otherwise
     window.addEventListener('DOMContentLoaded', () => {
       if (isLocal) {
-        document.querySelector('.controls').style.display = 'none';
+        document.getElementById('remoteControls').style.display = 'none';
         document.getElementById('restartBtn').style.display = '';
         document.getElementById('killBtn').style.display = '';
         connectLocal();
       } else {
         // Default broker list for remote mode
         if (!window._mqttBrokers) {
-          window._mqttBrokers = [{ label: 'Vu Studio (EMQX)', url: 'wss://c9b6cc55.ala.us-east-1.emqxsl.com:8084/mqtt', username: 'dev', password: 'testing' }];
-          populateBrokerSelect();
+          window._mqttBrokers = [
+            { id: 'emqx', label: 'Vu Studio (EMQX)', url: 'wss://c9b6cc55.ala.us-east-1.emqxsl.com:8084/mqtt', username: 'dev', password: 'testing' },
+            { id: 'railway', label: 'Railway', url: 'wss://mqtt.vu.studio/mqtt', username: 'dev', password: 'testing' }
+          ];
+          populateBrokerSelect('emqx');
         }
         connect();
       }

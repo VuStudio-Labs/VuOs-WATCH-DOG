@@ -1,7 +1,7 @@
 import html from "../index.html" with { type: "text" };
 import type { TelemetryPayload } from "./types";
 import { readConfigs, VUOS_DIR } from "./config";
-import { getMqttBrokerConfig } from "./mqtt";
+import { getMqttBrokerConfig, switchBroker, getActiveBrokerId } from "./mqtt";
 import type { ServerWebSocket } from "bun";
 import * as path from "path";
 
@@ -53,7 +53,7 @@ export function startServer(wallId: string) {
 
   Bun.serve<WsData>({
     port: PORT,
-    fetch(req, server) {
+    async fetch(req, server) {
       const url = new URL(req.url);
 
       // WebSocket upgrade
@@ -88,6 +88,31 @@ export function startServer(wallId: string) {
             }
           }, 2000);
           return new Response(JSON.stringify({ ok: true }), {
+            headers: { "Content-Type": "application/json" },
+          });
+        } catch (e: any) {
+          return new Response(JSON.stringify({ ok: false, error: e.message }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+      }
+
+      // Switch MQTT broker
+      if (url.pathname === "/api/switch-broker" && req.method === "POST") {
+        try {
+          const body = await req.json();
+          const brokerId = body.brokerId;
+          if (!brokerId) {
+            return new Response(JSON.stringify({ ok: false, error: "Missing brokerId" }), {
+              status: 400,
+              headers: { "Content-Type": "application/json" },
+            });
+          }
+          await switchBroker(brokerId);
+          // Notify all dashboard clients of the broker change
+          broadcast({ type: "broker-switched", data: { activeBrokerId: getActiveBrokerId() } });
+          return new Response(JSON.stringify({ ok: true, activeBrokerId: getActiveBrokerId() }), {
             headers: { "Content-Type": "application/json" },
           });
         } catch (e: any) {

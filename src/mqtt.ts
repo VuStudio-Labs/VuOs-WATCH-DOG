@@ -1,33 +1,49 @@
 import mqtt, { type MqttClient } from "mqtt";
 import type { TelemetryPayload } from "./types";
 
-// Primary broker (EMQX — always connected, MQTTS for Bun compatibility)
-const BROKER_URL = process.env.MQTT_BROKER_URL || "mqtts://c9b6cc55.ala.us-east-1.emqxsl.com:8883";
-const USERNAME = process.env.MQTT_USERNAME || "dev";
-const PASSWORD = process.env.MQTT_PASSWORD || "testing";
+export interface BrokerConfig {
+  id: string;
+  label: string;
+  url: string;       // server-side (mqtts:// or mqtt://)
+  wsUrl: string;     // dashboard (wss://)
+  username: string;
+  password: string;
+}
 
-// Secondary broker (optional — telemetry mirror)
-const BROKER2_URL = process.env.MQTT2_BROKER_URL || "";
-const USERNAME2 = process.env.MQTT2_USERNAME || "";
-const PASSWORD2 = process.env.MQTT2_PASSWORD || "";
-
-/** Broker configs for the dashboard client */
-export function getMqttBrokerConfig() {
-  const primary = {
+// Broker presets
+const BROKERS: BrokerConfig[] = [
+  {
+    id: "emqx",
     label: "Vu Studio (EMQX)",
-    url: process.env.MQTT_BROKER_WS_URL || "wss://c9b6cc55.ala.us-east-1.emqxsl.com:8084/mqtt",
-    username: USERNAME,
-    password: PASSWORD,
+    url: process.env.MQTT_BROKER_URL || "mqtts://c9b6cc55.ala.us-east-1.emqxsl.com:8883",
+    wsUrl: process.env.MQTT_BROKER_WS_URL || "wss://c9b6cc55.ala.us-east-1.emqxsl.com:8084/mqtt",
+    username: process.env.MQTT_USERNAME || "dev",
+    password: process.env.MQTT_PASSWORD || "testing",
+  },
+  {
+    id: "railway",
+    label: "Railway",
+    url: process.env.MQTT2_BROKER_URL || "mqtt://tramway.proxy.rlwy.net:20979",
+    wsUrl: process.env.MQTT2_BROKER_WS_URL || "wss://mqtt.vu.studio/mqtt",
+    username: process.env.MQTT2_USERNAME || "dev",
+    password: process.env.MQTT2_PASSWORD || "testing",
+  },
+];
+
+export function getBrokers(): BrokerConfig[] {
+  return BROKERS;
+}
+
+export function getBrokerById(id: string): BrokerConfig | undefined {
+  return BROKERS.find((b) => b.id === id);
+}
+
+/** Broker configs for the dashboard client (WSS URLs only) */
+export function getMqttBrokerConfig() {
+  return {
+    brokers: BROKERS.map((b) => ({ id: b.id, label: b.label, url: b.wsUrl, username: b.username, password: b.password })),
+    activeBrokerId: activeBrokerId,
   };
-  const secondary = BROKER2_URL
-    ? {
-        label: process.env.MQTT2_LABEL || "Secondary Broker",
-        url: process.env.MQTT2_BROKER_WS_URL || BROKER2_URL,
-        username: USERNAME2,
-        password: PASSWORD2,
-      }
-    : null;
-  return { primary, secondary };
 }
 
 export const TOPICS = {
@@ -40,18 +56,20 @@ export const TOPICS = {
 
 export type ControlHandler = (action: string, payload: Record<string, any>) => void;
 
+let activeClient: MqttClient | null = null;
+let activeBrokerId: string = BROKERS[0].id;
+let activeWallId: string = "";
+let activeControlHandler: ControlHandler | undefined;
+
 function createClient(
-  url: string,
-  username: string,
-  password: string,
-  wallId: string,
-  label: string
+  broker: BrokerConfig,
+  wallId: string
 ): Promise<MqttClient> {
   return new Promise((resolve, reject) => {
-    const client = mqtt.connect(url, {
-      username: username || undefined,
-      password: password || undefined,
-      clientId: `watchdog-${label}-${wallId}-${Date.now()}`,
+    const client = mqtt.connect(broker.url, {
+      username: broker.username || undefined,
+      password: broker.password || undefined,
+      clientId: `watchdog-${broker.id}-${wallId}-${Date.now()}`,
       clean: true,
       keepalive: 30,
       reconnectPeriod: 5000,
@@ -67,7 +85,7 @@ function createClient(
     });
 
     const timeout = setTimeout(() => {
-      reject(new Error(`MQTT connection timeout (${label})`));
+      reject(new Error(`MQTT connection timeout (${broker.label})`));
     }, 15_000);
 
     client.on("connect", () => {
@@ -77,7 +95,7 @@ function createClient(
         JSON.stringify({ status: "online", wallId, timestamp: Date.now() }),
         { qos: 1, retain: true }
       );
-      console.log(`[mqtt] Connected to ${label}`);
+      console.log(`[mqtt] Connected to ${broker.label}`);
       resolve(client);
     });
 
@@ -88,16 +106,9 @@ function createClient(
   });
 }
 
-export async function connectMqtt(
-  wallId: string,
-  onControl?: ControlHandler
-): Promise<{ primary: MqttClient; secondary: MqttClient | null }> {
-  // Primary — always connects
-  const primary = await createClient(BROKER_URL, USERNAME, PASSWORD, wallId, "primary");
-
-  // Subscribe to control topic on primary
-  primary.subscribe(TOPICS.control(wallId), { qos: 1 });
-  primary.on("message", (topic, payload) => {
+function subscribeControl(client: MqttClient, wallId: string, onControl?: ControlHandler) {
+  client.subscribe(TOPICS.control(wallId), { qos: 1 });
+  client.on("message", (topic, payload) => {
     if (topic === TOPICS.control(wallId) && onControl) {
       try {
         const msg = JSON.parse(payload.toString());
@@ -105,49 +116,84 @@ export async function connectMqtt(
       } catch {}
     }
   });
+}
 
-  // Secondary — optional
-  let secondary: MqttClient | null = null;
-  if (BROKER2_URL) {
-    try {
-      secondary = await createClient(BROKER2_URL, USERNAME2, PASSWORD2, wallId, "secondary");
-    } catch (err: any) {
-      console.error(`[mqtt] Secondary broker failed: ${err.message}`);
-    }
+export async function connectMqtt(
+  wallId: string,
+  onControl?: ControlHandler
+): Promise<MqttClient> {
+  activeWallId = wallId;
+  activeControlHandler = onControl;
+
+  const broker = BROKERS[0]; // default to first (EMQX)
+  activeBrokerId = broker.id;
+  activeClient = await createClient(broker, wallId);
+  subscribeControl(activeClient, wallId, onControl);
+
+  return activeClient;
+}
+
+/** Switch the watchdog to a different broker. Returns the new client. */
+export async function switchBroker(brokerId: string): Promise<MqttClient> {
+  const broker = getBrokerById(brokerId);
+  if (!broker) throw new Error(`Unknown broker: ${brokerId}`);
+  if (brokerId === activeBrokerId && activeClient?.connected) {
+    return activeClient;
   }
 
-  return { primary, secondary };
+  console.log(`[mqtt] Switching to ${broker.label}...`);
+
+  // Publish offline on old broker before disconnecting
+  if (activeClient) {
+    try {
+      activeClient.publish(
+        TOPICS.status(activeWallId),
+        JSON.stringify({ status: "offline", wallId: activeWallId, timestamp: Date.now() }),
+        { qos: 1, retain: true }
+      );
+      activeClient.end(true);
+    } catch {}
+  }
+
+  activeBrokerId = brokerId;
+  activeClient = await createClient(broker, activeWallId);
+  subscribeControl(activeClient, activeWallId, activeControlHandler);
+
+  console.log(`[mqtt] Switched to ${broker.label}`);
+  return activeClient;
+}
+
+export function getActiveClient(): MqttClient | null {
+  return activeClient;
+}
+
+export function getActiveBrokerId(): string {
+  return activeBrokerId;
 }
 
 export function publishTelemetry(
-  clients: { primary: MqttClient; secondary: MqttClient | null },
   wallId: string,
   data: TelemetryPayload
 ): void {
+  if (!activeClient) return;
   const json = JSON.stringify(data);
-  const opts = { qos: 0 as const, retain: true };
-  clients.primary.publish(TOPICS.telemetry(wallId), json, opts);
-  clients.secondary?.publish(TOPICS.telemetry(wallId), json, opts);
+  activeClient.publish(TOPICS.telemetry(wallId), json, { qos: 0, retain: true });
 }
 
 export function publishConfig(
-  clients: { primary: MqttClient; secondary: MqttClient | null },
   wallId: string,
   data: object
 ): void {
+  if (!activeClient) return;
   const json = JSON.stringify(data);
-  const opts = { qos: 0 as const, retain: true };
-  clients.primary.publish(TOPICS.config(wallId), json, opts);
-  clients.secondary?.publish(TOPICS.config(wallId), json, opts);
+  activeClient.publish(TOPICS.config(wallId), json, { qos: 0, retain: true });
 }
 
 export function publishCommand(
-  clients: { primary: MqttClient; secondary: MqttClient | null },
   wallId: string,
   data: object
 ): void {
+  if (!activeClient) return;
   const json = JSON.stringify(data);
-  const opts = { qos: 0 as const, retain: false };
-  clients.primary.publish(TOPICS.commands(wallId), json, opts);
-  clients.secondary?.publish(TOPICS.commands(wallId), json, opts);
+  activeClient.publish(TOPICS.commands(wallId), json, { qos: 0, retain: false });
 }
