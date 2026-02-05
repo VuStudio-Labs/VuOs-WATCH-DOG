@@ -56,10 +56,11 @@ const DEFAULT_CONFIG: StreamingConfig = {
 };
 
 // Ports to try if default is busy
-const FALLBACK_PORTS = [8000, 8001, 8002, 8003, 8080, 8888];
+const HTTP_FALLBACK_PORTS = [8000, 8001, 8002, 8003, 8080, 8888];
+const TURN_FALLBACK_PORTS = [3478, 3479, 3480, 3481];
 
 /**
- * Check if a port is available
+ * Check if a TCP port is available
  */
 async function isPortAvailable(port: number): Promise<boolean> {
   try {
@@ -75,14 +76,27 @@ async function isPortAvailable(port: number): Promise<boolean> {
 }
 
 /**
- * Find an available port from the fallback list
+ * Find an available HTTP port
  */
-async function findAvailablePort(): Promise<number | null> {
-  for (const port of FALLBACK_PORTS) {
+async function findAvailableHttpPort(): Promise<number | null> {
+  for (const port of HTTP_FALLBACK_PORTS) {
     if (await isPortAvailable(port)) {
       return port;
     }
-    console.log(`[streaming] Port ${port} is busy, trying next...`);
+    console.log(`[streaming] HTTP port ${port} is busy, trying next...`);
+  }
+  return null;
+}
+
+/**
+ * Find an available TURN port
+ */
+async function findAvailableTurnPort(): Promise<number | null> {
+  for (const port of TURN_FALLBACK_PORTS) {
+    if (await isPortAvailable(port)) {
+      return port;
+    }
+    console.log(`[streaming] TURN port ${port} is busy, trying next...`);
   }
   return null;
 }
@@ -176,7 +190,8 @@ export async function startStreaming(config?: Partial<StreamingConfig>): Promise
   // Kill any zombie webrtc-streamer processes from previous sessions
   try {
     Bun.spawnSync(["taskkill", "/F", "/IM", "webrtc-streamer.exe"], { stdio: ["ignore", "ignore", "ignore"] });
-    await new Promise(r => setTimeout(r, 500));
+    // Wait longer for ports to be released
+    await new Promise(r => setTimeout(r, 1500));
   } catch {}
 
   const streamerExe = getStreamerExe();
@@ -187,12 +202,12 @@ export async function startStreaming(config?: Partial<StreamingConfig>): Promise
 
   currentConfig = { ...DEFAULT_CONFIG, ...config };
 
-  // Find available port if default is busy
+  // Find available HTTP port
   const requestedPort = currentConfig.port;
-  const availablePort = await findAvailablePort();
+  const availablePort = await findAvailableHttpPort();
 
   if (!availablePort) {
-    throw new Error(`No available ports found. Tried: ${FALLBACK_PORTS.join(", ")}`);
+    throw new Error(`No available HTTP ports found. Tried: ${HTTP_FALLBACK_PORTS.join(", ")}`);
   }
 
   if (availablePort !== requestedPort) {
@@ -200,6 +215,23 @@ export async function startStreaming(config?: Partial<StreamingConfig>): Promise
   }
 
   currentConfig.port = availablePort;
+
+  // Find available TURN port if enabled
+  if (currentConfig.enableTurn) {
+    const requestedTurnPort = currentConfig.turnPort;
+    const availableTurnPort = await findAvailableTurnPort();
+
+    if (!availableTurnPort) {
+      console.warn(`[streaming] No TURN ports available, disabling TURN`);
+      currentConfig.enableTurn = false;
+    } else {
+      if (availableTurnPort !== requestedTurnPort) {
+        console.log(`[streaming] TURN port ${requestedTurnPort} busy, using ${availableTurnPort}`);
+      }
+      currentConfig.turnPort = availableTurnPort;
+    }
+  }
+
   currentState = {
     status: "starting",
     pid: null,
