@@ -179,6 +179,25 @@ TelemetryPayload {
 
 See `src/types.ts` for full field definitions.
 
+## Releasing
+
+When creating a new release:
+
+1. **Always check existing versions first**:
+   ```bash
+   gh release list
+   ```
+
+2. **Increment from the latest version** (currently using semver v2.x.x)
+
+3. **Build and release**:
+   ```bash
+   bun run build
+   gh release create v2.3.X vu-watchdog.zip --title "v2.3.X - Description" --notes "..."
+   ```
+
+4. **Never guess the version** — always look at `gh release list` first!
+
 ## Important Notes
 
 - **Windows-only**: Uses PowerShell for system queries, nvidia-smi for GPU, Windows paths
