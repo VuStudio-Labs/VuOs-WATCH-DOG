@@ -9,9 +9,9 @@ import {
   isStreamerAvailable, type StreamingState
 } from "./streaming";
 import {
-  startRemoteBridge, stopRemoteBridge, getBridgeState,
-  setStateChangeCallback, type VdoBridgeState
-} from "./vdo-bridge";
+  startRemoteViewing, stopRemoteViewing, getRemoteBridgeState,
+  setRemoteStateChangeCallback, type RemoteBridgeState
+} from "./remote-bridge";
 
 const PORT = 3200;
 
@@ -58,7 +58,7 @@ export function broadcastStreaming(state: StreamingState & { available: boolean 
   broadcast({ type: "streaming", data: state });
 }
 
-export function broadcastRemoteStreaming(state: VdoBridgeState) {
+export function broadcastRemoteStreaming(state: RemoteBridgeState) {
   broadcast({ type: "remoteStreaming", data: state });
 }
 
@@ -81,8 +81,8 @@ function sendConfig(ws: ServerWebSocket<WsData>) {
 }
 
 export function startServer(wallId: string) {
-  // Set up VDO bridge state change callback
-  setStateChangeCallback((state) => {
+  // Set up remote bridge state change callback
+  setRemoteStateChangeCallback((state) => {
     broadcast({ type: "remoteStreaming", data: state });
   });
 
@@ -209,8 +209,8 @@ export function startServer(wallId: string) {
             }, 400);
           }
 
-          const viewerUrl = await startRemoteBridge(wallId);
-          const bridgeState = getBridgeState();
+          const viewerUrl = await startRemoteViewing(wallId);
+          const bridgeState = getRemoteBridgeState();
           broadcast({ type: "remoteStreaming", data: bridgeState });
           return jsonResponse({ ok: true, ...bridgeState });
         } catch (e: any) {
@@ -221,8 +221,8 @@ export function startServer(wallId: string) {
       // Stop remote streaming
       if (url.pathname === "/api/remote-stream-stop" && req.method === "POST") {
         try {
-          await stopRemoteBridge();
-          const bridgeState = getBridgeState();
+          await stopRemoteViewing();
+          const bridgeState = getRemoteBridgeState();
           broadcast({ type: "remoteStreaming", data: bridgeState });
           return jsonResponse({ ok: true, ...bridgeState });
         } catch (e: any) {
@@ -232,7 +232,7 @@ export function startServer(wallId: string) {
 
       // Get remote streaming status
       if (url.pathname === "/api/remote-stream-status" && req.method === "GET") {
-        return jsonResponse(getBridgeState());
+        return jsonResponse(getRemoteBridgeState());
       }
 
       // Serve index.html
@@ -262,7 +262,7 @@ export function startServer(wallId: string) {
         // Send remote streaming state
         ws.send(JSON.stringify({
           type: "remoteStreaming",
-          data: getBridgeState()
+          data: getRemoteBridgeState()
         }));
       },
       message(_ws, msg) {
