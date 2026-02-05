@@ -5,7 +5,8 @@ node_modules/
 vu-watchdog.exe
 vu-watchdog-new.exe
 vu-watchdog-backup.exe
-vu-watchdog-dist.zip
+vu-watchdog.zip
+vu-watchdog-*.zip
 dist/
 
 # Environment
