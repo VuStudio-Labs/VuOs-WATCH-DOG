@@ -60,6 +60,25 @@ const HTTP_FALLBACK_PORTS = [8000, 8001, 8002, 8003, 8080, 8888];
 const TURN_FALLBACK_PORTS = [3478, 3479, 3480, 3481];
 
 /**
+ * Get the local IP address for TURN server external address
+ */
+function getLocalIp(): string {
+  try {
+    const { networkInterfaces } = require("os");
+    const nets = networkInterfaces();
+    for (const name of Object.keys(nets)) {
+      for (const net of nets[name]) {
+        // Skip internal/loopback and IPv6
+        if (!net.internal && net.family === "IPv4") {
+          return net.address;
+        }
+      }
+    }
+  } catch {}
+  return "127.0.0.1";
+}
+
+/**
  * Check if a TCP port is available
  */
 async function isPortAvailable(port: number): Promise<boolean> {
@@ -259,7 +278,9 @@ export async function startStreaming(config?: Partial<StreamingConfig>): Promise
 
     // Enable embedded TURN server for remote access through NAT
     if (currentConfig.enableTurn) {
-      args.push("-T", `turn:turn@0.0.0.0:${currentConfig.turnPort}`);
+      const localIp = getLocalIp();
+      console.log(`[streaming] Using local IP for TURN: ${localIp}`);
+      args.push("-T", `turn:turn@${localIp}:${currentConfig.turnPort}`);
     }
 
     // Note: Quality settings (width/fps/bitrate) not supported by this webrtc-streamer version
