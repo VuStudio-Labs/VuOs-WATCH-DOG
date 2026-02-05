@@ -22,13 +22,28 @@ export interface StreamingState {
   error: string | null;
 }
 
+export interface StreamQuality {
+  width: number | null;
+  height: number | null;
+  fps: number | null;
+  bitrate: number | null;
+}
+
 export interface StreamingConfig {
   port: number;           // HTTP port for webrtc-streamer (default 8000)
   stunServer: string;     // External STUN server for NAT traversal
   enableTurn: boolean;    // Enable embedded TURN server
   turnPort: number;       // TURN server port
   monitor: number | null; // Monitor index (0=first, 1=second, null=all)
+  quality: StreamQuality; // Video quality settings
 }
+
+// Quality presets
+export const QUALITY_PRESETS: Record<string, StreamQuality> = {
+  low: { width: 1280, height: 720, fps: 15, bitrate: 1000 },
+  medium: { width: 1920, height: 1080, fps: 30, bitrate: 3000 },
+  high: { width: 1920, height: 1080, fps: 60, bitrate: 6000 },
+};
 
 const DEFAULT_CONFIG: StreamingConfig = {
   port: 8000,
@@ -36,6 +51,7 @@ const DEFAULT_CONFIG: StreamingConfig = {
   enableTurn: true,
   turnPort: 3478,
   monitor: 0,             // Default to primary monitor only
+  quality: QUALITY_PRESETS.medium,
 };
 
 // Find webrtc-streamer binary - use cwd for compiled exe compatibility
@@ -79,6 +95,7 @@ function publishStatus(): void {
   publishStreamStatus(activeWallId, {
     ...currentState,
     monitor: currentConfig.monitor,
+    quality: currentConfig.quality,
     available: isStreamerAvailable(),
   });
 }
@@ -159,6 +176,12 @@ export async function startStreaming(config?: Partial<StreamingConfig>): Promise
     if (currentConfig.enableTurn) {
       args.push("-T", `turn:turn@0.0.0.0:${currentConfig.turnPort}`);
     }
+
+    // Quality settings
+    const q = currentConfig.quality;
+    if (q.width) args.push("-W", String(q.width));
+    if (q.fps) args.push("-F", String(q.fps));
+    if (q.bitrate) args.push("-b", String(q.bitrate));
 
     console.log(`[streaming] Command: ${STREAMER_EXE} ${args.join(" ")}`);
 

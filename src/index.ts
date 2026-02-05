@@ -23,7 +23,8 @@ import type { TelemetryPayload, LeasePayload, CommandPayload } from "./types";
 import * as path from "path";
 import {
   startStreaming, stopStreaming, getStreamingState, isStreamerAvailable,
-  setStreamingWallId, publishInitialStreamStatus,
+  setStreamingWallId, publishInitialStreamStatus, QUALITY_PRESETS,
+  type StreamQuality,
 } from "./streaming";
 import {
   startRemoteViewing, stopRemoteViewing, getRemoteBridgeState,
@@ -176,6 +177,21 @@ async function main() {
     },
   });
 
+  // Helper to parse quality from args
+  function parseQuality(args: Record<string, any>): StreamQuality {
+    // Check for preset first
+    if (args.quality && typeof args.quality === "string" && QUALITY_PRESETS[args.quality]) {
+      return QUALITY_PRESETS[args.quality];
+    }
+    // Otherwise use explicit values or defaults
+    return {
+      width: args.width ?? QUALITY_PRESETS.medium.width,
+      height: args.height ?? QUALITY_PRESETS.medium.height,
+      fps: args.fps ?? QUALITY_PRESETS.medium.fps,
+      bitrate: args.bitrate ?? QUALITY_PRESETS.medium.bitrate,
+    };
+  }
+
   // Streaming commands
   commandProcessor.registerCommand({
     type: "START_STREAM",
@@ -186,7 +202,8 @@ async function main() {
         throw new Error("webrtc-streamer not installed");
       }
       const monitor = args.monitor !== undefined ? args.monitor : 0;
-      await startStreaming({ monitor });
+      const quality = parseQuality(args);
+      await startStreaming({ monitor, quality });
       const state = getStreamingState();
       broadcastStreaming({ ...state, available: true });
 
@@ -220,6 +237,44 @@ async function main() {
       broadcastStreaming({ ...state, available: isStreamerAvailable() });
 
       return { message: "Streaming stopped", details: { state } };
+    },
+  });
+
+  commandProcessor.registerCommand({
+    type: "SET_STREAM_QUALITY",
+    requiresLease: false,
+    localBypass: true,
+    handler: async (args) => {
+      const currentState = getStreamingState();
+      if (currentState.status !== "running") {
+        throw new Error("Stream is not running");
+      }
+
+      // Get current monitor setting and new quality
+      const quality = parseQuality(args);
+      const monitor = args.monitor !== undefined ? args.monitor : 0;
+
+      // Stop current stream
+      await stopRemoteViewing();
+      await stopStreaming();
+
+      // Restart with new quality
+      await startStreaming({ monitor, quality });
+      const state = getStreamingState();
+      broadcastStreaming({ ...state, available: true });
+
+      // Restart remote viewing
+      try {
+        await startRemoteViewing(wallId);
+        broadcastRemoteStreaming(getRemoteBridgeState());
+      } catch (e: any) {
+        console.error("[streaming] Failed to restart remote viewing:", e.message);
+      }
+
+      return {
+        message: "Stream quality updated",
+        details: { state, quality, remote: getRemoteBridgeState() },
+      };
     },
   });
 

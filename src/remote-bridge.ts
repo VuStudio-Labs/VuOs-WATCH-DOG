@@ -154,8 +154,8 @@ export async function stopRemoteViewing(): Promise<void> {
     ];
     mqttClient.unsubscribe(topics);
 
-    // Clear retained offer
-    mqttClient.publish(WEBRTC_TOPICS.offer(wallId), "", { retain: true });
+    // Clear retained offer (empty string clears retained message)
+    mqttClient.publish(WEBRTC_TOPICS.offer(wallId), "", { retain: true, qos: 1 });
 
     mqttClient.removeListener("message", handleMqttMessage);
   }
@@ -314,7 +314,7 @@ async function pollIce(viewer: ViewerConnection): Promise<void> {
           to: viewer.id,
           from: myId,
         }),
-        { qos: 0 }
+        { qos: 1 }
       );
     }
   } catch {

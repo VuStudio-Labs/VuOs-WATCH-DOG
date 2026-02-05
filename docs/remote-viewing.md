@@ -15,12 +15,26 @@ Control streaming via MQTT commands to `watchdog/{wallId}/command/{clientId}`:
   "ttlMs": 15000,
   "type": "START_STREAM",
   "args": {
-    "monitor": 0
+    "monitor": 0,
+    "quality": "medium"
   }
 }
 ```
 
+**Args:**
 - `monitor`: 0 = primary, 1 = second monitor, null = all monitors
+- `quality`: preset ("low", "medium", "high") OR explicit values below
+- `width`: video width in pixels (e.g., 1920)
+- `height`: video height in pixels (e.g., 1080)
+- `fps`: frames per second (e.g., 30)
+- `bitrate`: target bitrate in kbps (e.g., 3000)
+
+**Quality Presets:**
+| Preset | Width | Height | FPS | Bitrate |
+|--------|-------|--------|-----|---------|
+| low | 1280 | 720 | 15 | 1000 kbps |
+| medium | 1920 | 1080 | 30 | 3000 kbps |
+| high | 1920 | 1080 | 60 | 6000 kbps |
 
 ### Stop Stream
 ```json
@@ -33,6 +47,22 @@ Control streaming via MQTT commands to `watchdog/{wallId}/command/{clientId}`:
   "args": {}
 }
 ```
+
+### Set Stream Quality (while running)
+```json
+{
+  "schema": "vu.watchdog.command.v1",
+  "ts": 1234567890,
+  "commandId": "unique-id",
+  "ttlMs": 15000,
+  "type": "SET_STREAM_QUALITY",
+  "args": {
+    "quality": "low"
+  }
+}
+```
+
+Restarts the stream with new quality settings. Accepts same quality args as START_STREAM.
 
 ### Stream Status
 
@@ -47,6 +77,12 @@ Subscribe to `watchdog/{wallId}/stream/status` for streaming state updates (reta
   "viewerUrl": "http://localhost:8000/webrtcstreamer.html?video=desktop",
   "error": null,
   "monitor": 0,
+  "quality": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "bitrate": 3000
+  },
   "available": true
 }
 ```

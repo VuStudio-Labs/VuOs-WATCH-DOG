@@ -120,7 +120,8 @@ export type CommandType =
   | "REQUEST_TELEMETRY"
   | "REQUEST_CONFIG"
   | "START_STREAM"
-  | "STOP_STREAM";
+  | "STOP_STREAM"
+  | "SET_STREAM_QUALITY";
 
 export interface CommandPayload {
   schema: "vu.watchdog.command.v1";

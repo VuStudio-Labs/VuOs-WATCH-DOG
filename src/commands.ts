@@ -21,6 +21,7 @@ const LEGACY_ACTION_MAP: Record<string, CommandType> = {
   "switch-broker": "SWITCH_BROKER",
   "start-stream": "START_STREAM",
   "stop-stream": "STOP_STREAM",
+  "set-stream-quality": "SET_STREAM_QUALITY",
 };
 
 // --- Idempotency store ---
