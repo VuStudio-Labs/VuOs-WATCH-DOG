@@ -11,7 +11,7 @@ import { Subprocess } from "bun";
 import * as path from "path";
 import * as fs from "fs";
 import { publishStreamStatus, clearStreamStatus as clearMqttStreamStatus, updateMainStatus } from "./mqtt";
-import { getStreamerExe, getHtmlDir, areAssetsAvailable } from "./assets";
+import { getStreamerExe, areAssetsAvailable } from "./assets";
 
 // Streaming state
 export interface StreamingState {
@@ -148,9 +148,8 @@ export async function startStreaming(config?: Partial<StreamingConfig>): Promise
   } catch {}
 
   const streamerExe = getStreamerExe();
-  const htmlDir = getHtmlDir();
 
-  if (!streamerExe || !htmlDir) {
+  if (!streamerExe) {
     throw new Error(`webrtc-streamer not found. Run: bun scripts/download-webrtc-streamer.ts`);
   }
 
@@ -174,8 +173,7 @@ export async function startStreaming(config?: Partial<StreamingConfig>): Promise
 
     // Build command line arguments
     const args: string[] = [
-      "-H", `0.0.0.0:${currentConfig.port}`,        // HTTP binding
-      "-w", htmlDir,                                 // Web root for viewer
+      "-H", `0.0.0.0:${currentConfig.port}`,        // HTTP binding (for WebRTC API)
       "-s", currentConfig.stunServer,                // STUN server for NAT traversal
       "-n", "desktop",                               // Stream name
       "-u", screenUrl,                               // Capture screen (specific monitor or all)

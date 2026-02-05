@@ -10,21 +10,13 @@ import * as fs from "fs";
 const ROOT = path.join(import.meta.dir, "..");
 const BIN_DIR = path.join(ROOT, "bin");
 const DIST_DIR = path.join(ROOT, "dist");
-const OUT_EXE = path.join(ROOT, "vu-watchdog.exe");
 const ICO_FILE = path.join(ROOT, "logo.ico");
 
-// Check if bin/ folder exists with required assets
+// Check if webrtc-streamer exists
 const streamerExe = path.join(BIN_DIR, "webrtc-streamer.exe");
-const htmlDir = path.join(BIN_DIR, "html");
 
 if (!fs.existsSync(streamerExe)) {
   console.error("[build] ERROR: bin/webrtc-streamer.exe not found");
-  console.error("[build] Run: bun scripts/download-webrtc-streamer.ts");
-  process.exit(1);
-}
-
-if (!fs.existsSync(htmlDir)) {
-  console.error("[build] ERROR: bin/html/ not found");
   console.error("[build] Run: bun scripts/download-webrtc-streamer.ts");
   process.exit(1);
 }
@@ -72,54 +64,20 @@ fs.mkdirSync(DIST_DIR, { recursive: true });
 // Copy exe (rename to final name)
 fs.copyFileSync(TEMP_EXE, path.join(DIST_DIR, "vu-watchdog.exe"));
 
+// Copy webrtc-streamer.exe alongside (no bin/ subfolder needed now)
+fs.copyFileSync(streamerExe, path.join(DIST_DIR, "webrtc-streamer.exe"));
+
 // Clean up temp exe
 try {
   fs.unlinkSync(TEMP_EXE);
 } catch {}
 
-// Copy bin folder
-function copyDirSync(src: string, dest: string): void {
-  if (!fs.existsSync(dest)) {
-    fs.mkdirSync(dest, { recursive: true });
-  }
-
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    // Skip .git directory
-    if (entry.name === ".git") continue;
-
-    const srcPath = path.join(src, entry.name);
-    const destPath = path.join(dest, entry.name);
-
-    if (entry.isDirectory()) {
-      copyDirSync(srcPath, destPath);
-    } else {
-      fs.copyFileSync(srcPath, destPath);
-    }
-  }
-}
-
-copyDirSync(BIN_DIR, path.join(DIST_DIR, "bin"));
-
 // Show summary
-const exeStats = fs.statSync(path.join(DIST_DIR, "vu-watchdog.exe"));
-const exeSizeMB = (exeStats.size / 1024 / 1024).toFixed(2);
-
-// Calculate total dist size
-function getDirSize(dir: string): number {
-  let size = 0;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      size += getDirSize(fullPath);
-    } else {
-      size += fs.statSync(fullPath).size;
-    }
-  }
-  return size;
-}
-
-const totalSize = getDirSize(DIST_DIR);
-const totalSizeMB = (totalSize / 1024 / 1024).toFixed(2);
+const watchdogStats = fs.statSync(path.join(DIST_DIR, "vu-watchdog.exe"));
+const streamerStats = fs.statSync(path.join(DIST_DIR, "webrtc-streamer.exe"));
+const watchdogSizeMB = (watchdogStats.size / 1024 / 1024).toFixed(2);
+const streamerSizeMB = (streamerStats.size / 1024 / 1024).toFixed(2);
+const totalSizeMB = ((watchdogStats.size + streamerStats.size) / 1024 / 1024).toFixed(2);
 
 // Create zip archive for easy distribution
 console.log("[build] Creating zip archive...");
@@ -143,10 +101,8 @@ if (zipResult.exitCode === 0) {
 console.log("");
 console.log("[build] Done!");
 console.log(`[build] Distribution: dist/`);
-console.log(`[build]   vu-watchdog.exe (${exeSizeMB} MB)`);
-console.log(`[build]   bin/ (streaming assets)`);
+console.log(`[build]   vu-watchdog.exe       (${watchdogSizeMB} MB)`);
+console.log(`[build]   webrtc-streamer.exe   (${streamerSizeMB} MB)`);
 console.log(`[build]   Total: ${totalSizeMB} MB`);
 console.log("");
-console.log("[build] To deploy:");
-console.log("[build]   Option 1: Copy the entire dist/ folder to the target machine");
-console.log("[build]   Option 2: Extract vu-watchdog-dist.zip to the target machine");
+console.log("[build] To deploy: Copy both .exe files to the target machine (same folder)");
