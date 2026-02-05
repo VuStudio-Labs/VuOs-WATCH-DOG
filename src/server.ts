@@ -4,6 +4,10 @@ import { readConfigs, VUOS_DIR } from "./config";
 import { getMqttBrokerConfig, getActiveBrokerId } from "./mqtt";
 import type { ServerWebSocket } from "bun";
 import type { CommandProcessor } from "./commands";
+import {
+  startStreaming, stopStreaming, getStreamingState, getViewerUrl,
+  isStreamerAvailable, type StreamingState
+} from "./streaming";
 
 const PORT = 3200;
 
@@ -44,6 +48,10 @@ export function broadcastCommand(command: {
   args: (string | number | boolean)[];
 }) {
   broadcast({ type: "command", data: command });
+}
+
+export function broadcastStreaming(state: StreamingState & { available: boolean }) {
+  broadcast({ type: "streaming", data: state });
 }
 
 function broadcast(msg: object) {
@@ -131,6 +139,49 @@ export function startServer(wallId: string) {
         return jsonResponse({ ok: ack.status === "APPLIED", ack });
       }
 
+      // --- Screen Streaming Endpoints ---
+
+      // Start streaming
+      if (url.pathname === "/api/stream-start" && req.method === "POST") {
+        try {
+          if (!isStreamerAvailable()) {
+            return jsonResponse({
+              ok: false,
+              error: "webrtc-streamer not installed. Run: bun scripts/download-webrtc-streamer.ts"
+            }, 400);
+          }
+          await startStreaming();
+          const state = getStreamingState();
+          broadcast({ type: "streaming", data: state });
+          return jsonResponse({ ok: true, state });
+        } catch (e: any) {
+          return jsonResponse({ ok: false, error: e.message }, 500);
+        }
+      }
+
+      // Stop streaming
+      if (url.pathname === "/api/stream-stop" && req.method === "POST") {
+        try {
+          await stopStreaming();
+          const state = getStreamingState();
+          broadcast({ type: "streaming", data: state });
+          return jsonResponse({ ok: true, state });
+        } catch (e: any) {
+          return jsonResponse({ ok: false, error: e.message }, 500);
+        }
+      }
+
+      // Get streaming status
+      if (url.pathname === "/api/stream-status" && req.method === "GET") {
+        const state = getStreamingState();
+        const host = req.headers.get("host") || `localhost:${PORT}`;
+        return jsonResponse({
+          ...state,
+          available: isStreamerAvailable(),
+          viewerUrl: state.status === "running" ? getViewerUrl(host.split(":")[0] + ":8000") : null,
+        });
+      }
+
       // Serve index.html
       if (url.pathname === "/" || url.pathname === "/index.html") {
         return new Response(html, {
@@ -150,6 +201,11 @@ export function startServer(wallId: string) {
         if (latestHealth) {
           ws.send(JSON.stringify({ type: "health", data: latestHealth }));
         }
+        // Send streaming state
+        ws.send(JSON.stringify({
+          type: "streaming",
+          data: { ...getStreamingState(), available: isStreamerAvailable() }
+        }));
       },
       message(_ws, msg) {
         // Handle inbound commands from local dashboard

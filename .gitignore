@@ -27,3 +27,6 @@ extracted-icon.ico
 
 # Logs
 *.log
+
+# Streaming binaries
+bin/

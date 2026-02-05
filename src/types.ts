@@ -48,11 +48,22 @@ export interface LogMetrics {
   lastErrorTime: string | null;
 }
 
+export interface VuosProcessInfo {
+  responding: boolean;
+  threads: number;
+  handles: number;
+  priority: string;
+  startTime: string | null;
+  cpuTimeMs: number;
+  gpuMemoryMB: number | null;
+}
+
 export interface AppMetrics {
   vuosProcessRunning: boolean;
   serverProcessRunning: boolean;
   serverVersion: string;
   vuosMemoryMB: number | null;
+  vuosProcess: VuosProcessInfo | null;
   crashCountToday: number;
   serverLock: ServerLockInfo;
   logs: LogMetrics;

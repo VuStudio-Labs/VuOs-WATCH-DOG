@@ -442,12 +442,32 @@
           <span class="metric-value" id="appVuos">—</span>
         </div>
         <div class="metric-row">
+          <span class="metric-label">Responding</span>
+          <span class="metric-value" id="appResponding">—</span>
+        </div>
+        <div class="metric-row">
           <span class="metric-label">Server Process</span>
           <span class="metric-value" id="appServer">—</span>
         </div>
         <div class="metric-row">
           <span class="metric-label">VUOS Memory</span>
           <span class="metric-value" id="appMemory">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">VUOS GPU Memory</span>
+          <span class="metric-value" id="appGpuMem">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Threads / Handles</span>
+          <span class="metric-value" id="appThreads">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Priority</span>
+          <span class="metric-value" id="appPriority">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Process Uptime</span>
+          <span class="metric-value" id="appProcUptime">—</span>
         </div>
         <div class="metric-row">
           <span class="metric-label">Crashes Today</span>
@@ -500,6 +520,31 @@
           <span class="metric-value" id="errTime">—</span>
         </div>
         <div style="margin-top:10px;padding:10px;background:#1a1a1a;border-radius:6px;font-family:'SF Mono','Fira Code',monospace;font-size:11px;color:#ef4444;word-break:break-all;min-height:36px;" id="errMessage">—</div>
+      </div>
+
+      <div class="card" id="streamingCard">
+        <div class="card-title">Screen Streaming</div>
+        <div class="metric-row">
+          <span class="metric-label">Status</span>
+          <span class="metric-value" id="streamStatus">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Uptime</span>
+          <span class="metric-value" id="streamUptime">—</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Port</span>
+          <span class="metric-value" id="streamPort">8000</span>
+        </div>
+        <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">
+          <button id="btnStartStream" onclick="startStream()" style="flex:1;min-width:100px;background:#22c55e;color:#000;border:none;padding:10px 16px;border-radius:6px;font-weight:600;cursor:pointer;">Start Stream</button>
+          <button id="btnStopStream" onclick="stopStream()" style="flex:1;min-width:100px;background:#ef4444;color:#fff;border:none;padding:10px 16px;border-radius:6px;font-weight:600;cursor:pointer;display:none;">Stop Stream</button>
+          <a id="streamViewerLink" href="#" target="_blank" style="flex:1;min-width:100px;text-align:center;background:#3b82f6;color:#fff;border:none;padding:10px 16px;border-radius:6px;font-weight:600;text-decoration:none;display:none;">Open Viewer</a>
+        </div>
+        <div id="streamNotAvailable" style="margin-top:12px;padding:10px;background:#7f1d1d;border-radius:6px;font-size:11px;color:#fca5a5;display:none;">
+          webrtc-streamer not installed.<br/>
+          Run: <code style="background:#450a0a;padding:2px 4px;border-radius:3px;">bun scripts/download-webrtc-streamer.ts</code>
+        </div>
       </div>
 
       <div class="card" id="assetPreviewCard" style="display:none;">
@@ -1625,6 +1670,30 @@
       setOnline('appVuos', a.vuosProcessRunning);
       setOnline('appServer', a.serverProcessRunning);
       setText('appMemory', a.vuosMemoryMB != null ? formatMB(a.vuosMemoryMB) : '—');
+
+      // Extended VUOS process info
+      var vp = a.vuosProcess;
+      if (vp && a.vuosProcessRunning) {
+        var respEl = document.getElementById('appResponding');
+        respEl.textContent = vp.responding ? 'Yes' : 'FROZEN';
+        respEl.className = 'metric-value ' + (vp.responding ? 'good' : 'danger');
+        setText('appGpuMem', vp.gpuMemoryMB != null ? vp.gpuMemoryMB + ' MB' : '—');
+        setText('appThreads', vp.threads + ' / ' + vp.handles);
+        var prioEl = document.getElementById('appPriority');
+        prioEl.textContent = vp.priority;
+        prioEl.className = 'metric-value' + (vp.priority === 'Normal' ? ' warn' : ' good');
+        if (vp.startTime) {
+          var procAge = Math.floor((Date.now() - new Date(vp.startTime).getTime()) / 1000);
+          setText('appProcUptime', formatUptime(procAge));
+        }
+      } else {
+        setText('appResponding', '—');
+        setText('appGpuMem', '—');
+        setText('appThreads', '—');
+        setText('appPriority', '—');
+        setText('appProcUptime', '—');
+      }
+
       var crashEl = document.getElementById('appCrashes');
       crashEl.textContent = a.crashCountToday || 0;
       crashEl.style.color = a.crashCountToday > 0 ? '#ef4444' : '#a3a3a3';
@@ -1879,6 +1948,8 @@
             appendEvent(msg.data);
           } else if (msg.type === 'ack') {
             handleAck(msg.data);
+          } else if (msg.type === 'streaming') {
+            updateStreamingUI(msg.data);
           }
         } catch {}
       };
@@ -1951,6 +2022,104 @@
           }
         })
         .catch(function() { btn.textContent = 'Kill Watchdog'; btn.disabled = false; });
+    }
+
+    // --- Streaming ---
+    function startStream() {
+      var btn = document.getElementById('btnStartStream');
+      btn.textContent = 'Starting...';
+      btn.disabled = true;
+      fetch('/api/stream-start', { method: 'POST' })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (data.ok) {
+            updateStreamingUI(data.state);
+          } else {
+            btn.textContent = 'Failed: ' + (data.error || 'unknown');
+            btn.style.background = '#ef4444';
+            setTimeout(function() { btn.textContent = 'Start Stream'; btn.disabled = false; btn.style.background = '#22c55e'; }, 3000);
+          }
+        })
+        .catch(function(e) {
+          btn.textContent = 'Error';
+          setTimeout(function() { btn.textContent = 'Start Stream'; btn.disabled = false; btn.style.background = '#22c55e'; }, 3000);
+        });
+    }
+
+    function stopStream() {
+      var btn = document.getElementById('btnStopStream');
+      btn.textContent = 'Stopping...';
+      btn.disabled = true;
+      fetch('/api/stream-stop', { method: 'POST' })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          updateStreamingUI(data.state || { status: 'stopped' });
+        })
+        .catch(function() {
+          btn.textContent = 'Stop Stream';
+          btn.disabled = false;
+        });
+    }
+
+    function updateStreamingUI(state) {
+      var statusEl = document.getElementById('streamStatus');
+      var uptimeEl = document.getElementById('streamUptime');
+      var portEl = document.getElementById('streamPort');
+      var startBtn = document.getElementById('btnStartStream');
+      var stopBtn = document.getElementById('btnStopStream');
+      var viewerLink = document.getElementById('streamViewerLink');
+      var notAvailable = document.getElementById('streamNotAvailable');
+
+      // Show/hide not available warning
+      if (state.available === false) {
+        notAvailable.style.display = 'block';
+        startBtn.disabled = true;
+        startBtn.style.opacity = '0.5';
+      } else {
+        notAvailable.style.display = 'none';
+        startBtn.style.opacity = '1';
+      }
+
+      statusEl.textContent = state.status || 'stopped';
+      statusEl.className = 'metric-value ' + (state.status === 'running' ? 'good' : state.status === 'error' ? 'danger' : '');
+
+      if (state.port) portEl.textContent = state.port;
+
+      if (state.status === 'running') {
+        startBtn.style.display = 'none';
+        stopBtn.style.display = '';
+        stopBtn.textContent = 'Stop Stream';
+        stopBtn.disabled = false;
+        viewerLink.style.display = '';
+        // Build viewer URL - use current hostname with streaming port
+        var host = window.location.hostname || 'localhost';
+        viewerLink.href = 'http://' + host + ':' + (state.port || 8000) + '/webrtcstreamer.html?video=desktop';
+
+        // Update uptime
+        if (state.startedAt) {
+          var uptime = Math.floor((Date.now() - state.startedAt) / 1000);
+          uptimeEl.textContent = formatUptime(uptime);
+        }
+      } else {
+        startBtn.style.display = '';
+        startBtn.textContent = 'Start Stream';
+        startBtn.disabled = state.available === false;
+        stopBtn.style.display = 'none';
+        viewerLink.style.display = 'none';
+        uptimeEl.textContent = '—';
+      }
+
+      if (state.error) {
+        statusEl.textContent = state.error;
+      }
+    }
+
+    function formatUptime(seconds) {
+      if (seconds < 60) return seconds + 's';
+      if (seconds < 3600) return Math.floor(seconds / 60) + 'm ' + (seconds % 60) + 's';
+      var h = Math.floor(seconds / 3600);
+      var m = Math.floor((seconds % 3600) / 60);
+      return h + 'h ' + m + 'm';
     }
 
     function showAckOnBtn(btn, ack, originalText) {
