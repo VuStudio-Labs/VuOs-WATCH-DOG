@@ -47,16 +47,120 @@ export const QUALITY_PRESETS: Record<string, StreamQuality> = {
   high: { width: 1920, height: 1080, fps: 60, bitrate: 6000 },
 };
 
-// Free public TURN server from Open Relay Project (metered.ca)
-// For production, consider getting your own credentials from metered.ca or twilio.com
+// TURN server configuration
+// Primary: Cloudflare TURN (via Vu Studio API)
+// Fallback: Metered.ca TURN (Vu Studio account)
+// Backup: Open Relay Project (free public)
+
+const CLOUDFLARE_TURN_KEY = "432338ab38bdf2583e26996c3b9ff488";
+const CLOUDFLARE_API_KEY = "6c6bb64b5e4030fb5873f85155c19a8a4675d056a1b84a0c27476be011215c28";
+const METERED_KEY = "x5temSYro_2G91kS2O9YLshdKL5jD68CBfzgg1J7vUBe32Kq";
+
+// Fallback public TURN (Open Relay Project)
 const PUBLIC_TURN_SERVER = "turn:openrelayproject:openrelayproject@a.relay.metered.ca:80";
+
+interface TurnCredentials {
+  urls: string[];
+  username: string;
+  credential: string;
+}
+
+/**
+ * Fetch TURN credentials from Cloudflare (primary)
+ */
+async function getCloudfareTurnCredentials(): Promise<TurnCredentials | null> {
+  try {
+    const res = await fetch(
+      `https://rtc.live.cloudflare.com/v1/turn/keys/${CLOUDFLARE_TURN_KEY}/credentials/generate`,
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${CLOUDFLARE_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ ttl: 86400 }), // 24 hour TTL
+        signal: AbortSignal.timeout(5000),
+      }
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+
+    // Cloudflare returns iceServers array
+    if (data.iceServers?.[0]) {
+      const server = data.iceServers[0];
+      return {
+        urls: server.urls || [`turn:turn.vu.studio:3478`],
+        username: server.username,
+        credential: server.credential,
+      };
+    }
+    return null;
+  } catch (err: any) {
+    console.log(`[streaming] Cloudflare TURN failed: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Fetch TURN credentials from Metered (fallback)
+ */
+async function getMeteredTurnCredentials(): Promise<TurnCredentials | null> {
+  try {
+    const res = await fetch(
+      `https://vustudio.metered.live/api/v1/turn/credential?secretKey=${METERED_KEY}`,
+      { signal: AbortSignal.timeout(5000) }
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+
+    // Metered returns array of credentials
+    if (Array.isArray(data) && data.length > 0) {
+      return {
+        urls: data.map((c: any) => c.urls || c.url).flat().filter(Boolean),
+        username: data[0].username,
+        credential: data[0].credential,
+      };
+    }
+    return null;
+  } catch (err: any) {
+    console.log(`[streaming] Metered TURN failed: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Get TURN server URL with credentials (tries Cloudflare → Metered → Public)
+ */
+async function getTurnServerUrl(): Promise<string> {
+  // Try Cloudflare first
+  const cfCreds = await getCloudfareTurnCredentials();
+  if (cfCreds && cfCreds.username && cfCreds.credential) {
+    const url = cfCreds.urls[0] || "turn:turn.vu.studio:3478";
+    const host = url.replace(/^turns?:/, "").split("?")[0];
+    console.log(`[streaming] Using Cloudflare TURN: ${host}`);
+    return `turn:${cfCreds.username}:${cfCreds.credential}@${host}`;
+  }
+
+  // Try Metered fallback
+  const meteredCreds = await getMeteredTurnCredentials();
+  if (meteredCreds && meteredCreds.username && meteredCreds.credential) {
+    const url = meteredCreds.urls[0] || "turn:a.relay.metered.ca:80";
+    const host = url.replace(/^turns?:/, "").split("?")[0];
+    console.log(`[streaming] Using Metered TURN: ${host}`);
+    return `turn:${meteredCreds.username}:${meteredCreds.credential}@${host}`;
+  }
+
+  // Fallback to public TURN
+  console.log(`[streaming] Using public TURN fallback`);
+  return PUBLIC_TURN_SERVER;
+}
 
 const DEFAULT_CONFIG: StreamingConfig = {
   port: 8000,
   stunServer: "stun:stun.l.google.com:19302",
   enableTurn: false,      // Disable broken embedded TURN
   turnPort: 3478,
-  turnServer: PUBLIC_TURN_SERVER,  // Use public TURN server instead
+  turnServer: null,       // Will be fetched dynamically
   monitor: 0,             // Default to primary monitor only
   quality: QUALITY_PRESETS.medium,
 };
@@ -282,12 +386,12 @@ export async function startStreaming(config?: Partial<StreamingConfig>): Promise
       "-u", screenUrl,                               // Capture screen (specific monitor or all)
     ];
 
-    // Add external TURN server if configured (preferred over embedded)
-    if (currentConfig.turnServer) {
-      console.log(`[streaming] Using external TURN server`);
-      args.push("-s", currentConfig.turnServer);
+    // Get TURN server (Cloudflare → Metered → Public fallback)
+    const turnServerUrl = currentConfig.turnServer || await getTurnServerUrl();
+    if (turnServerUrl) {
+      args.push("-s", turnServerUrl);
     }
-    // Fallback to embedded TURN server (broken external addr, but works on LAN)
+    // Legacy: embedded TURN server (broken external addr, but works on LAN)
     else if (currentConfig.enableTurn) {
       const localIp = getLocalIp();
       console.log(`[streaming] Using embedded TURN with local IP: ${localIp}`);
