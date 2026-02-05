@@ -20,6 +20,9 @@ const CONDITIONS: ConditionDef[] = [
     evaluate: (t) => t.app.serverLock !== null && !t.app.serverLock.healthy && (t.app.serverLock.heartbeatAgeMs ?? 0) > 15_000,
   },
 
+  { id: "VUOS_NOT_RESPONDING", level: "CRITICAL", debounceMs: 10_000,
+    evaluate: (t) => t.app.vuosProcessRunning && t.app.vuosProcess !== null && !t.app.vuosProcess.responding },
+
   // DEGRADED
   { id: "INTERNET_OFFLINE", level: "DEGRADED", debounceMs: 30_000, evaluate: (t) => !t.network.internetOnline },
   { id: "LATENCY_HIGH", level: "DEGRADED", debounceMs: 60_000, evaluate: (t) => (t.network.latencyMs ?? 0) > 250 },

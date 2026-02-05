@@ -26,6 +26,7 @@ import {
   setStreamingWallId, publishInitialStreamStatus, QUALITY_PRESETS,
   type StreamQuality,
 } from "./streaming";
+import { initializeAssets } from "./assets";
 import {
   startRemoteViewing, stopRemoteViewing, getRemoteBridgeState,
 } from "./remote-bridge";
@@ -63,6 +64,14 @@ async function main() {
   hideConsole();
 
   console.log("[watchdog] Starting...");
+
+  // Initialize assets (extracts embedded webrtc-streamer if needed)
+  const assets = initializeAssets();
+  if (assets) {
+    console.log(`[watchdog] Streaming assets available`);
+  } else {
+    console.log(`[watchdog] Streaming assets not found (streaming disabled)`);
+  }
 
   const config = loadConfig();
   const wallId = config.wallId;

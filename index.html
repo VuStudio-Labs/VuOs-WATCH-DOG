@@ -564,7 +564,7 @@
           <div style="font-size:11px;color:#a1a1aa;margin-bottom:6px;">Share this URL with remote viewers:</div>
           <div style="display:flex;gap:6px;">
             <input type="text" id="remoteViewerUrl" readonly onclick="this.select()" style="flex:1;background:#1a1a1a;border:1px solid #262626;border-radius:6px;padding:8px 10px;color:#fff;font-family:'SF Mono','Fira Code',monospace;font-size:11px;">
-            <button onclick="copyRemoteUrl()" style="background:#3b82f6;color:#fff;border:none;padding:8px 12px;border-radius:6px;font-weight:600;cursor:pointer;font-size:12px;">Copy</button>
+            <button onclick="copyRemoteUrl(this)" style="background:#3b82f6;color:#fff;border:none;padding:8px 12px;border-radius:6px;font-weight:600;cursor:pointer;font-size:12px;">Copy</button>
           </div>
         </div>
         <div id="remoteError" style="display:none;margin-top:12px;padding:10px;background:#7f1d1d;border-radius:6px;font-size:11px;color:#fca5a5;"></div>
@@ -2251,11 +2251,10 @@
       }
     }
 
-    function copyRemoteUrl() {
+    function copyRemoteUrl(btn) {
       var input = document.getElementById('remoteViewerUrl');
       input.select();
       navigator.clipboard.writeText(input.value).then(function() {
-        var btn = event.target;
         btn.textContent = 'Copied!';
         setTimeout(function() { btn.textContent = 'Copy'; }, 2000);
       });

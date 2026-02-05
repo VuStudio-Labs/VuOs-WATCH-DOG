@@ -3,7 +3,9 @@ node_modules/
 
 # Build output
 vu-watchdog.exe
+vu-watchdog-new.exe
 vu-watchdog-backup.exe
+vu-watchdog-dist.zip
 dist/
 
 # Environment
@@ -30,3 +32,7 @@ extracted-icon.ico
 
 # Streaming binaries
 bin/
+
+# Bun build cache
+*.bun-build
+nul

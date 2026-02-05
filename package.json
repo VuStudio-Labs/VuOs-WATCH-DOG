@@ -9,8 +9,9 @@
   "scripts": {
     "dev": "bun --watch run src/index.ts",
     "start": "bun run src/index.ts",
-    "build": "bun build --compile src/index.ts --outfile vu-watchdog.exe && bun scripts/set-icon.ts",
-    "build:ico": "bun scripts/build-ico.ts"
+    "build": "bun scripts/build.ts",
+    "build:ico": "bun scripts/build-ico.ts",
+    "pack-bin": "bun scripts/pack-bin.ts"
   },
   "dependencies": {
     "mqtt": "^5.14.1"

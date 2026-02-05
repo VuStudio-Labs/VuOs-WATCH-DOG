@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import type { AppMetrics, ServerLockInfo, LogMetrics } from "../types";
+import type { AppMetrics, ServerLockInfo, LogMetrics, VuosProcessInfo } from "../types";
 import { VUOS_DIR } from "../config";
 
 const LOCK_FILE = path.join(VUOS_DIR, "vu-server.lock");
@@ -14,38 +14,73 @@ let cachedServerRunning = false;
 let cachedServerVersion = "unknown";
 let cachedLogs: LogMetrics = { recentErrorCount: 0, lastError: null, lastErrorTime: null };
 let cachedVuosMemoryMB: number | null = null;
+let cachedVuosProcess: VuosProcessInfo | null = null;
+let lastCpuTimeMs = 0;
+let lastCpuTimestamp = 0;
 
 // --- Crash detection ---
 let cachedCrashCount = 0;
 let lastKnownPid: number | null = null;
 let crashCountDate: string = new Date().toDateString();
 
-async function getProcessInfo(name: string): Promise<{ running: boolean; pid: number | null; memoryMB: number | null }> {
+interface ProcessResult {
+  running: boolean;
+  pid: number | null;
+  memoryMB: number | null;
+  processInfo: VuosProcessInfo | null;
+}
+
+const VUOS_INFO_SCRIPT = `$p = Get-Process -Name 'Vu One' -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($p) {
+  $cpuTime = $p.TotalProcessorTime.TotalMilliseconds
+  $gpuMemMB = -1
   try {
-    const proc = Bun.spawn([
-      "powershell",
-      "-NoProfile",
-      "-Command",
-      `$p = Get-Process -Name '${name}' -ErrorAction SilentlyContinue | Select-Object -First 1; if ($p) { Write-Output "$($p.Id)|$($p.WorkingSet64)" } else { Write-Output "none" }`,
-    ]);
+    $samples = (Get-Counter '\\GPU Process Memory(*)\\Dedicated Usage' -ErrorAction SilentlyContinue).CounterSamples
+    $match = $samples | Where-Object { $_.InstanceName -match ('pid_' + $p.Id + '_') } | Select-Object -First 1
+    if ($match) { $gpuMemMB = [math]::Round($match.CookedValue / 1MB, 0) }
+  } catch {}
+  $startTime = $p.StartTime.ToString('o')
+  Write-Output "$($p.Id)|$($p.WorkingSet64)|$($p.Responding)|$($p.Threads.Count)|$($p.HandleCount)|$($p.PriorityClass)|$startTime|$cpuTime|$gpuMemMB"
+} else { Write-Output "none" }`;
+
+async function getVuosProcessInfo(): Promise<ProcessResult> {
+  try {
+    const proc = Bun.spawn(["powershell", "-NoProfile", "-Command", VUOS_INFO_SCRIPT]);
     const output = await new Response(proc.stdout).text();
     await proc.exited;
 
     const trimmed = output.trim();
     if (trimmed === "none" || !trimmed) {
-      return { running: false, pid: null, memoryMB: null };
+      return { running: false, pid: null, memoryMB: null, processInfo: null };
     }
 
     const parts = trimmed.split("|");
     const pid = parseInt(parts[0], 10);
     const memBytes = parseInt(parts[1], 10);
+    const responding = parts[2] === "True";
+    const threads = parseInt(parts[3], 10);
+    const handles = parseInt(parts[4], 10);
+    const priority = parts[5] || "Normal";
+    const startTime = parts[6] || null;
+    const cpuTimeMs = parseFloat(parts[7]) || 0;
+    const gpuMemMB = parseInt(parts[8], 10);
+
     return {
       running: true,
       pid: isNaN(pid) ? null : pid,
       memoryMB: isNaN(memBytes) ? null : Math.round(memBytes / (1024 * 1024)),
+      processInfo: {
+        responding,
+        threads: isNaN(threads) ? 0 : threads,
+        handles: isNaN(handles) ? 0 : handles,
+        priority,
+        startTime,
+        cpuTimeMs,
+        gpuMemoryMB: gpuMemMB >= 0 ? gpuMemMB : null,
+      },
     };
   } catch {
-    return { running: false, pid: null, memoryMB: null };
+    return { running: false, pid: null, memoryMB: null, processInfo: null };
   }
 }
 
@@ -148,10 +183,11 @@ function readRecentErrors(): LogMetrics {
 }
 
 async function refreshProcesses() {
-  // Get Vu One info (PID + memory) in a single call
-  const vuosInfo = await getProcessInfo("Vu One");
+  // Get Vu One info (PID + memory + extended) in a single call
+  const vuosInfo = await getVuosProcessInfo();
   cachedVuosRunning = vuosInfo.running;
   cachedVuosMemoryMB = vuosInfo.memoryMB;
+  cachedVuosProcess = vuosInfo.processInfo;
 
   // Crash detection: PID changed while process is running
   const today = new Date().toDateString();
@@ -204,6 +240,7 @@ export function collectApp(): AppMetrics {
     serverProcessRunning: cachedServerRunning,
     serverVersion: cachedServerVersion,
     vuosMemoryMB: cachedVuosMemoryMB,
+    vuosProcess: cachedVuosProcess,
     crashCountToday: cachedCrashCount,
     serverLock: readServerLock(),
     logs: cachedLogs,

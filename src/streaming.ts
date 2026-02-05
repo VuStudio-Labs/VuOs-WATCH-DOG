@@ -11,6 +11,7 @@ import { Subprocess } from "bun";
 import * as path from "path";
 import * as fs from "fs";
 import { publishStreamStatus, clearStreamStatus as clearMqttStreamStatus, updateMainStatus } from "./mqtt";
+import { getStreamerExe, getHtmlDir, areAssetsAvailable } from "./assets";
 
 // Streaming state
 export interface StreamingState {
@@ -53,11 +54,6 @@ const DEFAULT_CONFIG: StreamingConfig = {
   monitor: 0,             // Default to primary monitor only
   quality: QUALITY_PRESETS.medium,
 };
-
-// Find webrtc-streamer binary - use cwd for compiled exe compatibility
-const BIN_DIR = path.join(process.cwd(), "bin");
-const STREAMER_EXE = path.join(BIN_DIR, "webrtc-streamer.exe");
-const HTML_DIR = path.join(BIN_DIR, "html");
 
 let streamerProcess: Subprocess | null = null;
 let currentState: StreamingState = {
@@ -112,7 +108,7 @@ function clearStreamStatus(): void {
  * Check if webrtc-streamer binary exists
  */
 export function isStreamerAvailable(): boolean {
-  return fs.existsSync(STREAMER_EXE);
+  return areAssetsAvailable();
 }
 
 /**
@@ -151,8 +147,11 @@ export async function startStreaming(config?: Partial<StreamingConfig>): Promise
     await new Promise(r => setTimeout(r, 500));
   } catch {}
 
-  if (!isStreamerAvailable()) {
-    throw new Error(`webrtc-streamer not found at ${STREAMER_EXE}. Run: bun scripts/download-webrtc-streamer.ts`);
+  const streamerExe = getStreamerExe();
+  const htmlDir = getHtmlDir();
+
+  if (!streamerExe || !htmlDir) {
+    throw new Error(`webrtc-streamer not found. Run: bun scripts/download-webrtc-streamer.ts`);
   }
 
   currentConfig = { ...DEFAULT_CONFIG, ...config };
@@ -176,7 +175,7 @@ export async function startStreaming(config?: Partial<StreamingConfig>): Promise
     // Build command line arguments
     const args: string[] = [
       "-H", `0.0.0.0:${currentConfig.port}`,        // HTTP binding
-      "-w", HTML_DIR,                                // Web root for viewer
+      "-w", htmlDir,                                 // Web root for viewer
       "-s", currentConfig.stunServer,                // STUN server for NAT traversal
       "-n", "desktop",                               // Stream name
       "-u", screenUrl,                               // Capture screen (specific monitor or all)
@@ -190,10 +189,10 @@ export async function startStreaming(config?: Partial<StreamingConfig>): Promise
     // Note: Quality settings (width/fps/bitrate) not supported by this webrtc-streamer version
     // Quality is controlled by the source capture settings, not CLI args
 
-    console.log(`[streaming] Command: ${STREAMER_EXE} ${args.join(" ")}`);
+    console.log(`[streaming] Command: ${streamerExe} ${args.join(" ")}`);
 
-    streamerProcess = Bun.spawn([STREAMER_EXE, ...args], {
-      cwd: BIN_DIR,
+    streamerProcess = Bun.spawn([streamerExe, ...args], {
+      cwd: path.dirname(streamerExe),
       stdio: ["ignore", "pipe", "pipe"],
     });
 
