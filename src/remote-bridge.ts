@@ -6,9 +6,14 @@
  */
 
 import { getActiveClient, TOPICS } from "./mqtt";
+import { getStreamingState } from "./streaming";
 import type { MqttClient } from "mqtt";
 
-const WEBRTC_STREAMER_URL = "http://localhost:8000";
+// Get the current streamer URL based on streaming port
+function getStreamerUrl(): string {
+  const state = getStreamingState();
+  return `http://localhost:${state.port}`;
+}
 const ICE_POLL_INTERVAL = 100;
 
 export interface RemoteBridgeState {
@@ -86,7 +91,7 @@ export async function startRemoteViewing(wId: string): Promise<string> {
 
   // Verify webrtc-streamer is running
   try {
-    const res = await fetch(`${WEBRTC_STREAMER_URL}/api/getMediaList`);
+    const res = await fetch(`${getStreamerUrl()}/api/getMediaList`);
     if (!res.ok) throw new Error("webrtc-streamer not responding");
   } catch (err) {
     throw new Error("Local streaming must be running first");
@@ -223,16 +228,35 @@ function handleMqttMessage(topic: string, payload: Buffer): void {
 async function handleViewerJoin(viewerId: string): Promise<void> {
   if (!mqttClient || !wallId) return;
 
+  // Check if streaming is running
+  const streamState = getStreamingState();
+  if (streamState.status !== "running") {
+    console.log(`[remote-bridge] Ignoring join - stream is ${streamState.status}`);
+    return;
+  }
+
   const peerId = `peer-${viewerId.slice(0, 8)}-${Date.now()}`;
+  const streamerUrl = getStreamerUrl();
 
   try {
-    // Get offer from webrtc-streamer
-    const res = await fetch(
-      `${WEBRTC_STREAMER_URL}/api/createOffer?peerid=${peerId}&url=desktop`
-    );
+    // Get offer from webrtc-streamer with retry
+    let res: Response | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        res = await fetch(
+          `${streamerUrl}/api/createOffer?peerid=${peerId}&url=desktop`,
+          { signal: AbortSignal.timeout(2000) }
+        );
+        if (res.ok) break;
+      } catch {
+        if (attempt < 2) {
+          await new Promise(r => setTimeout(r, 500));
+        }
+      }
+    }
 
-    if (!res.ok) {
-      console.error(`[remote-bridge] Failed to create offer: ${res.status}`);
+    if (!res || !res.ok) {
+      console.error(`[remote-bridge] Failed to create offer after retries`);
       return;
     }
 
@@ -279,7 +303,7 @@ async function handleAnswer(viewerId: string, sdp: any): Promise<void> {
 
   try {
     await fetch(
-      `${WEBRTC_STREAMER_URL}/api/setAnswer?peerid=${viewer.peerId}`,
+      `${getStreamerUrl()}/api/setAnswer?peerid=${viewer.peerId}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -296,7 +320,7 @@ async function pollIce(viewer: ViewerConnection): Promise<void> {
 
   try {
     const res = await fetch(
-      `${WEBRTC_STREAMER_URL}/api/getIceCandidate?peerid=${viewer.peerId}`
+      `${getStreamerUrl()}/api/getIceCandidate?peerid=${viewer.peerId}`
     );
     if (!res.ok) return;
 
@@ -328,7 +352,7 @@ async function handleRemoteIce(viewerId: string, candidate: any): Promise<void> 
 
   try {
     await fetch(
-      `${WEBRTC_STREAMER_URL}/api/addIceCandidate?peerid=${viewer.peerId}`,
+      `${getStreamerUrl()}/api/addIceCandidate?peerid=${viewer.peerId}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -356,7 +380,7 @@ async function cleanupViewer(viewer: ViewerConnection): Promise<void> {
   }
 
   try {
-    await fetch(`${WEBRTC_STREAMER_URL}/api/hangup?peerid=${viewer.peerId}`, {
+    await fetch(`${getStreamerUrl()}/api/hangup?peerid=${viewer.peerId}`, {
       method: "POST",
     });
   } catch {}
