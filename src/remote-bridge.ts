@@ -14,7 +14,8 @@ function getStreamerUrl(): string {
   const state = getStreamingState();
   return `http://localhost:${state.port}`;
 }
-const ICE_POLL_INTERVAL = 100;
+const ICE_POLL_INTERVAL = 200; // Poll ICE candidates every 200ms
+const VIEWER_JOIN_DEBOUNCE = 2000; // Ignore rapid rejoins within 2s
 
 export interface RemoteBridgeState {
   status: "disconnected" | "connecting" | "connected" | "error";
@@ -30,6 +31,7 @@ interface ViewerConnection {
   connectedAt: number;
   icePollingInterval: Timer | null;
   iceCandidatesSent: Set<string>;
+  answerReceived: boolean;
 }
 
 // MQTT topics for WebRTC signaling
@@ -49,6 +51,7 @@ let wallId: string | null = null;
 let roomId: string | null = null;
 let myId: string | null = null;
 let viewers = new Map<string, ViewerConnection>();
+let recentJoins = new Map<string, number>(); // Track join timestamps to debounce
 let mqttClient: MqttClient | null = null;
 
 let state: RemoteBridgeState = {
@@ -166,6 +169,7 @@ export async function stopRemoteViewing(): Promise<void> {
   }
 
   await cleanupAllViewers();
+  recentJoins.clear();
 
   wallId = null;
   roomId = null;
@@ -228,11 +232,28 @@ function handleMqttMessage(topic: string, payload: Buffer): void {
 async function handleViewerJoin(viewerId: string): Promise<void> {
   if (!mqttClient || !wallId) return;
 
+  // Debounce rapid rejoins from same viewer
+  const lastJoin = recentJoins.get(viewerId);
+  const now = Date.now();
+  if (lastJoin && now - lastJoin < VIEWER_JOIN_DEBOUNCE) {
+    console.log(`[remote-bridge] Ignoring rapid rejoin from ${viewerId.slice(0, 8)} (${now - lastJoin}ms ago)`);
+    return;
+  }
+  recentJoins.set(viewerId, now);
+
   // Check if streaming is running
   const streamState = getStreamingState();
   if (streamState.status !== "running") {
     console.log(`[remote-bridge] Ignoring join - stream is ${streamState.status}`);
     return;
+  }
+
+  // If viewer already exists, clean up old connection first
+  const existingViewer = viewers.get(viewerId);
+  if (existingViewer) {
+    console.log(`[remote-bridge] Cleaning up existing connection for ${viewerId.slice(0, 8)}`);
+    await cleanupViewer(existingViewer);
+    viewers.delete(viewerId);
   }
 
   const peerId = `peer-${viewerId.slice(0, 8)}-${Date.now()}`;
@@ -261,7 +282,12 @@ async function handleViewerJoin(viewerId: string): Promise<void> {
     }
 
     const offer = await res.json();
-    console.log(`[remote-bridge] Sending offer to ${viewerId.slice(0, 8)}`);
+    console.log(`[remote-bridge] Created offer for ${viewerId.slice(0, 8)}:`, {
+      type: offer.type,
+      sdpLength: offer.sdp?.length || 0,
+      hasVideo: offer.sdp?.includes("m=video"),
+      hasAudio: offer.sdp?.includes("m=audio"),
+    });
 
     // Send offer via MQTT
     mqttClient.publish(
@@ -282,13 +308,24 @@ async function handleViewerJoin(viewerId: string): Promise<void> {
       connectedAt: Date.now(),
       icePollingInterval: null,
       iceCandidatesSent: new Set(),
+      answerReceived: false,
     };
 
     // Poll for ICE candidates
     viewer.icePollingInterval = setInterval(() => pollIce(viewer), ICE_POLL_INTERVAL);
 
+    // Stop ICE polling after 30s to prevent resource leak
+    setTimeout(() => {
+      if (viewer.icePollingInterval) {
+        console.log(`[remote-bridge] Stopping ICE polling for ${viewerId.slice(0, 8)} after timeout`);
+        clearInterval(viewer.icePollingInterval);
+        viewer.icePollingInterval = null;
+      }
+    }, 30000);
+
     viewers.set(viewerId, viewer);
     updateState({ viewerCount: viewers.size });
+    console.log(`[remote-bridge] Viewer ${viewerId.slice(0, 8)} connection setup complete, waiting for answer`);
 
   } catch (err) {
     console.error("[remote-bridge] Error handling viewer:", err);
@@ -297,12 +334,21 @@ async function handleViewerJoin(viewerId: string): Promise<void> {
 
 async function handleAnswer(viewerId: string, sdp: any): Promise<void> {
   const viewer = viewers.get(viewerId);
-  if (!viewer) return;
+  if (!viewer) {
+    console.log(`[remote-bridge] Answer from unknown viewer ${viewerId.slice(0, 8)}, ignoring`);
+    return;
+  }
 
-  console.log(`[remote-bridge] Answer from ${viewerId.slice(0, 8)}`);
+  if (viewer.answerReceived) {
+    console.log(`[remote-bridge] Duplicate answer from ${viewerId.slice(0, 8)}, ignoring`);
+    return;
+  }
+
+  console.log(`[remote-bridge] Answer from ${viewerId.slice(0, 8)}, setting on peer ${viewer.peerId}`);
+  viewer.answerReceived = true;
 
   try {
-    await fetch(
+    const res = await fetch(
       `${getStreamerUrl()}/api/setAnswer?peerid=${viewer.peerId}`,
       {
         method: "POST",
@@ -310,6 +356,11 @@ async function handleAnswer(viewerId: string, sdp: any): Promise<void> {
         body: JSON.stringify(sdp),
       }
     );
+    if (res.ok) {
+      console.log(`[remote-bridge] Answer applied successfully for ${viewerId.slice(0, 8)}`);
+    } else {
+      console.error(`[remote-bridge] setAnswer failed: ${res.status} ${res.statusText}`);
+    }
   } catch (err) {
     console.error("[remote-bridge] Error setting answer:", err);
   }
@@ -331,6 +382,14 @@ async function pollIce(viewer: ViewerConnection): Promise<void> {
       if (viewer.iceCandidatesSent.has(key)) continue;
       viewer.iceCandidatesSent.add(key);
 
+      // Log first few ICE candidates for debugging
+      if (viewer.iceCandidatesSent.size <= 3) {
+        const type = key.includes("typ host") ? "host" :
+                     key.includes("typ srflx") ? "srflx" :
+                     key.includes("typ relay") ? "relay" : "unknown";
+        console.log(`[remote-bridge] Sending ICE ${type} candidate to ${viewer.id.slice(0, 8)}`);
+      }
+
       mqttClient.publish(
         WEBRTC_TOPICS.ice(wallId),
         JSON.stringify({
@@ -348,10 +407,19 @@ async function pollIce(viewer: ViewerConnection): Promise<void> {
 
 async function handleRemoteIce(viewerId: string, candidate: any): Promise<void> {
   const viewer = viewers.get(viewerId);
-  if (!viewer) return;
+  if (!viewer) {
+    console.log(`[remote-bridge] ICE from unknown viewer ${viewerId.slice(0, 8)}, ignoring`);
+    return;
+  }
+
+  const candidateStr = candidate?.candidate || "";
+  const type = candidateStr.includes("typ host") ? "host" :
+               candidateStr.includes("typ srflx") ? "srflx" :
+               candidateStr.includes("typ relay") ? "relay" : "unknown";
+  console.log(`[remote-bridge] Received ICE ${type} candidate from ${viewerId.slice(0, 8)}`);
 
   try {
-    await fetch(
+    const res = await fetch(
       `${getStreamerUrl()}/api/addIceCandidate?peerid=${viewer.peerId}`,
       {
         method: "POST",
@@ -359,8 +427,11 @@ async function handleRemoteIce(viewerId: string, candidate: any): Promise<void> 
         body: JSON.stringify(candidate),
       }
     );
-  } catch {
-    // Ignore
+    if (!res.ok) {
+      console.error(`[remote-bridge] addIceCandidate failed: ${res.status}`);
+    }
+  } catch (err) {
+    console.error(`[remote-bridge] Error adding ICE candidate:`, err);
   }
 }
 
