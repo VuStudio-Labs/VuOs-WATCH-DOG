@@ -137,9 +137,19 @@ export function getStreamingState(): StreamingState {
  * Start screen capture streaming
  */
 export async function startStreaming(config?: Partial<StreamingConfig>): Promise<void> {
-  if (currentState.status === "running" || currentState.status === "starting") {
-    throw new Error("Streaming already active");
+  // Auto-stop any existing stream first
+  if (currentState.status === "running" || currentState.status === "starting" || streamerProcess) {
+    console.log("[streaming] Stopping existing stream first...");
+    await stopStreaming();
+    // Wait for port to be released
+    await new Promise(r => setTimeout(r, 1000));
   }
+
+  // Kill any zombie webrtc-streamer processes from previous sessions
+  try {
+    Bun.spawnSync(["taskkill", "/F", "/IM", "webrtc-streamer.exe"], { stdio: ["ignore", "ignore", "ignore"] });
+    await new Promise(r => setTimeout(r, 500));
+  } catch {}
 
   if (!isStreamerAvailable()) {
     throw new Error(`webrtc-streamer not found at ${STREAMER_EXE}. Run: bun scripts/download-webrtc-streamer.ts`);
@@ -177,11 +187,8 @@ export async function startStreaming(config?: Partial<StreamingConfig>): Promise
       args.push("-T", `turn:turn@0.0.0.0:${currentConfig.turnPort}`);
     }
 
-    // Quality settings
-    const q = currentConfig.quality;
-    if (q.width) args.push("-W", String(q.width));
-    if (q.fps) args.push("-F", String(q.fps));
-    if (q.bitrate) args.push("-b", String(q.bitrate));
+    // Note: Quality settings (width/fps/bitrate) not supported by this webrtc-streamer version
+    // Quality is controlled by the source capture settings, not CLI args
 
     console.log(`[streaming] Command: ${STREAMER_EXE} ${args.join(" ")}`);
 
