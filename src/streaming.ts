@@ -55,6 +55,38 @@ const DEFAULT_CONFIG: StreamingConfig = {
   quality: QUALITY_PRESETS.medium,
 };
 
+// Ports to try if default is busy
+const FALLBACK_PORTS = [8000, 8001, 8002, 8003, 8080, 8888];
+
+/**
+ * Check if a port is available
+ */
+async function isPortAvailable(port: number): Promise<boolean> {
+  try {
+    const server = Bun.serve({
+      port,
+      fetch() { return new Response("ok"); },
+    });
+    server.stop();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Find an available port from the fallback list
+ */
+async function findAvailablePort(): Promise<number | null> {
+  for (const port of FALLBACK_PORTS) {
+    if (await isPortAvailable(port)) {
+      return port;
+    }
+    console.log(`[streaming] Port ${port} is busy, trying next...`);
+  }
+  return null;
+}
+
 let streamerProcess: Subprocess | null = null;
 let currentState: StreamingState = {
   status: "stopped",
@@ -154,6 +186,20 @@ export async function startStreaming(config?: Partial<StreamingConfig>): Promise
   }
 
   currentConfig = { ...DEFAULT_CONFIG, ...config };
+
+  // Find available port if default is busy
+  const requestedPort = currentConfig.port;
+  const availablePort = await findAvailablePort();
+
+  if (!availablePort) {
+    throw new Error(`No available ports found. Tried: ${FALLBACK_PORTS.join(", ")}`);
+  }
+
+  if (availablePort !== requestedPort) {
+    console.log(`[streaming] Port ${requestedPort} busy, using ${availablePort}`);
+  }
+
+  currentConfig.port = availablePort;
   currentState = {
     status: "starting",
     pid: null,
