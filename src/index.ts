@@ -4,6 +4,7 @@ import { loadConfig, readConfigs, getOscPort, VUOS_DIR } from "./config";
 import {
   connectMqtt, publishTelemetry, publishHealth, publishConfig,
   publishCommand, publishEvent, switchBroker, getActiveClient, TOPICS,
+  clearWebrtcOffer,
 } from "./mqtt";
 import { startSystemPolling, collectSystem } from "./collectors/system";
 import { startNetworkPolling, collectNetwork } from "./collectors/network";
@@ -22,7 +23,7 @@ import type { TelemetryPayload, LeasePayload, CommandPayload } from "./types";
 import * as path from "path";
 import {
   startStreaming, stopStreaming, getStreamingState, isStreamerAvailable,
-  setStreamingWallId,
+  setStreamingWallId, publishInitialStreamStatus,
 } from "./streaming";
 import {
   startRemoteViewing, stopRemoteViewing, getRemoteBridgeState,
@@ -267,6 +268,10 @@ async function main() {
 
   console.log("[watchdog] MQTT connected");
   eventEmitter.emitLifecycle("BROKER_CONNECTED", "INFO", {});
+
+  // Clear stale retained messages and publish initial stopped status
+  clearWebrtcOffer(wallId);
+  publishInitialStreamStatus();
 
   const client = getActiveClient();
   if (client) {

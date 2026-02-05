@@ -230,3 +230,28 @@ export function publishStreamStatus(wallId: string, data: object): void {
   if (!activeClient) return;
   activeClient.publish(TOPICS.streamStatus(wallId), JSON.stringify(data), { qos: 1, retain: true });
 }
+
+export function clearStreamStatus(wallId: string): void {
+  if (!activeClient) return;
+  // Clear retained message by publishing empty string
+  activeClient.publish(TOPICS.streamStatus(wallId), "", { qos: 1, retain: true });
+}
+
+export function updateMainStatus(wallId: string, streamStatus: "running" | "stopped"): void {
+  if (!activeClient) return;
+  activeClient.publish(
+    TOPICS.status(wallId),
+    JSON.stringify({
+      status: "online",
+      wallId,
+      timestamp: Date.now(),
+      stream: { status: streamStatus },
+    }),
+    { qos: 1, retain: true }
+  );
+}
+
+export function clearWebrtcOffer(wallId: string): void {
+  if (!activeClient) return;
+  activeClient.publish(`watchdog/${wallId}/webrtc/offer`, "", { qos: 1, retain: true });
+}

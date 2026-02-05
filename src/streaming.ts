@@ -10,7 +10,7 @@
 import { Subprocess } from "bun";
 import * as path from "path";
 import * as fs from "fs";
-import { publishStreamStatus } from "./mqtt";
+import { publishStreamStatus, clearStreamStatus as clearMqttStreamStatus, updateMainStatus } from "./mqtt";
 
 // Streaming state
 export interface StreamingState {
@@ -56,12 +56,19 @@ let currentConfig = DEFAULT_CONFIG;
 let activeWallId: string | null = null;
 
 /**
- * Set the wall ID for MQTT publishing and publish initial status
+ * Set the wall ID for MQTT publishing
  */
 export function setStreamingWallId(wallId: string): void {
   activeWallId = wallId;
-  // Publish initial status (retained) so subscribers know current state
+}
+
+/**
+ * Publish initial stopped status to clear stale retained messages (call after MQTT connects)
+ */
+export function publishInitialStreamStatus(): void {
+  if (!activeWallId) return;
   publishStatus();
+  updateMainStatus(activeWallId, "stopped");
 }
 
 /**
@@ -74,6 +81,14 @@ function publishStatus(): void {
     monitor: currentConfig.monitor,
     available: isStreamerAvailable(),
   });
+}
+
+/**
+ * Clear retained stream status (prevents stale messages)
+ */
+function clearStreamStatus(): void {
+  if (!activeWallId) return;
+  clearMqttStreamStatus(activeWallId);
 }
 
 /**
@@ -184,6 +199,8 @@ export async function startStreaming(config?: Partial<StreamingConfig>): Promise
     console.log(`[streaming] Started on port ${currentConfig.port}`);
     console.log(`[streaming] Viewer URL: ${currentState.viewerUrl}`);
     publishStatus();
+    // Update main status topic to keep stream state in sync
+    if (activeWallId) updateMainStatus(activeWallId, "running");
 
     // Monitor process exit
     streamerProcess.exited.then((exitCode) => {
@@ -245,7 +262,10 @@ export async function stopStreaming(): Promise<void> {
   };
 
   console.log("[streaming] Stopped");
+  // Publish stopped status (overwrites any stale "running" retained message)
   publishStatus();
+  // Update main status topic to keep stream state in sync
+  if (activeWallId) updateMainStatus(activeWallId, "stopped");
 }
 
 /**
@@ -295,4 +315,6 @@ export function cleanup() {
     streamerProcess.kill();
     streamerProcess = null;
   }
+  // Clear retained status on graceful shutdown
+  clearStreamStatus();
 }
