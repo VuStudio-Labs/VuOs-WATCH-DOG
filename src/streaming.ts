@@ -158,9 +158,9 @@ async function getTurnServerUrl(): Promise<string> {
 const DEFAULT_CONFIG: StreamingConfig = {
   port: 8000,
   stunServer: "stun:stun.l.google.com:19302",
-  enableTurn: false,      // Disable broken embedded TURN
+  enableTurn: true,       // Embedded TURN for server-side relay candidates
   turnPort: 3478,
-  turnServer: null,       // Will be fetched dynamically
+  turnServer: null,
   monitor: 0,             // Default to primary monitor only
   quality: QUALITY_PRESETS.medium,
 };
@@ -386,15 +386,10 @@ export async function startStreaming(config?: Partial<StreamingConfig>): Promise
       "-u", screenUrl,                               // Capture screen (specific monitor or all)
     ];
 
-    // Get TURN server (Cloudflare → Metered → Public fallback)
-    const turnServerUrl = currentConfig.turnServer || await getTurnServerUrl();
-    if (turnServerUrl) {
-      args.push("-s", turnServerUrl);
-    }
-    // Legacy: embedded TURN server (broken external addr, but works on LAN)
-    else if (currentConfig.enableTurn) {
+    // Enable embedded TURN server for server-side relay candidates
+    if (currentConfig.enableTurn) {
       const localIp = getLocalIp();
-      console.log(`[streaming] Using embedded TURN with local IP: ${localIp}`);
+      console.log(`[streaming] Embedded TURN on ${localIp}:${currentConfig.turnPort}`);
       args.push("-T", `turn:turn@${localIp}:${currentConfig.turnPort}`);
     }
 
