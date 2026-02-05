@@ -8,6 +8,10 @@ import {
   startStreaming, stopStreaming, getStreamingState, getViewerUrl,
   isStreamerAvailable, type StreamingState
 } from "./streaming";
+import {
+  startRemoteBridge, stopRemoteBridge, getBridgeState,
+  setStateChangeCallback, type VdoBridgeState
+} from "./vdo-bridge";
 
 const PORT = 3200;
 
@@ -54,6 +58,10 @@ export function broadcastStreaming(state: StreamingState & { available: boolean 
   broadcast({ type: "streaming", data: state });
 }
 
+export function broadcastRemoteStreaming(state: VdoBridgeState) {
+  broadcast({ type: "remoteStreaming", data: state });
+}
+
 function broadcast(msg: object) {
   const json = JSON.stringify(msg);
   for (const ws of wsClients) {
@@ -73,6 +81,11 @@ function sendConfig(ws: ServerWebSocket<WsData>) {
 }
 
 export function startServer(wallId: string) {
+  // Set up VDO bridge state change callback
+  setStateChangeCallback((state) => {
+    broadcast({ type: "remoteStreaming", data: state });
+  });
+
   // Broadcast config to all clients every 60s
   setInterval(() => {
     broadcast({ type: "config", data: getConfigPayload() });
@@ -182,6 +195,46 @@ export function startServer(wallId: string) {
         });
       }
 
+      // --- Remote Streaming (VDO.ninja Bridge) Endpoints ---
+
+      // Start remote streaming
+      if (url.pathname === "/api/remote-stream-start" && req.method === "POST") {
+        try {
+          // Ensure local streaming is running first
+          const streamState = getStreamingState();
+          if (streamState.status !== "running") {
+            return jsonResponse({
+              ok: false,
+              error: "Local streaming must be running first. Start it via /api/stream-start"
+            }, 400);
+          }
+
+          const viewerUrl = await startRemoteBridge(wallId);
+          const bridgeState = getBridgeState();
+          broadcast({ type: "remoteStreaming", data: bridgeState });
+          return jsonResponse({ ok: true, ...bridgeState });
+        } catch (e: any) {
+          return jsonResponse({ ok: false, error: e.message }, 500);
+        }
+      }
+
+      // Stop remote streaming
+      if (url.pathname === "/api/remote-stream-stop" && req.method === "POST") {
+        try {
+          await stopRemoteBridge();
+          const bridgeState = getBridgeState();
+          broadcast({ type: "remoteStreaming", data: bridgeState });
+          return jsonResponse({ ok: true, ...bridgeState });
+        } catch (e: any) {
+          return jsonResponse({ ok: false, error: e.message }, 500);
+        }
+      }
+
+      // Get remote streaming status
+      if (url.pathname === "/api/remote-stream-status" && req.method === "GET") {
+        return jsonResponse(getBridgeState());
+      }
+
       // Serve index.html
       if (url.pathname === "/" || url.pathname === "/index.html") {
         return new Response(html, {
@@ -205,6 +258,11 @@ export function startServer(wallId: string) {
         ws.send(JSON.stringify({
           type: "streaming",
           data: { ...getStreamingState(), available: isStreamerAvailable() }
+        }));
+        // Send remote streaming state
+        ws.send(JSON.stringify({
+          type: "remoteStreaming",
+          data: getBridgeState()
         }));
       },
       message(_ws, msg) {

@@ -547,6 +547,36 @@
         </div>
       </div>
 
+      <div class="card" id="remoteStreamingCard">
+        <div class="card-title">Remote Streaming</div>
+        <div style="font-size:11px;color:#a1a1aa;margin-bottom:12px;">
+          Enable remote viewing without port forwarding via VDO.ninja
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Status</span>
+          <span class="metric-value" id="remoteStatus">disconnected</span>
+        </div>
+        <div class="metric-row" id="remoteViewersRow" style="display:none;">
+          <span class="metric-label">Viewers</span>
+          <span class="metric-value" id="remoteViewerCount">0</span>
+        </div>
+        <div id="remoteUrlRow" style="display:none;margin-top:12px;">
+          <div style="font-size:11px;color:#a1a1aa;margin-bottom:6px;">Share this URL with remote viewers:</div>
+          <div style="display:flex;gap:6px;">
+            <input type="text" id="remoteViewerUrl" readonly onclick="this.select()" style="flex:1;background:#1a1a1a;border:1px solid #262626;border-radius:6px;padding:8px 10px;color:#fff;font-family:'SF Mono','Fira Code',monospace;font-size:11px;">
+            <button onclick="copyRemoteUrl()" style="background:#3b82f6;color:#fff;border:none;padding:8px 12px;border-radius:6px;font-weight:600;cursor:pointer;font-size:12px;">Copy</button>
+          </div>
+        </div>
+        <div id="remoteError" style="display:none;margin-top:12px;padding:10px;background:#7f1d1d;border-radius:6px;font-size:11px;color:#fca5a5;"></div>
+        <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">
+          <button id="btnStartRemote" onclick="startRemoteStream()" style="flex:1;min-width:100px;background:#8b5cf6;color:#fff;border:none;padding:10px 16px;border-radius:6px;font-weight:600;cursor:pointer;">Enable Remote</button>
+          <button id="btnStopRemote" onclick="stopRemoteStream()" style="flex:1;min-width:100px;background:#ef4444;color:#fff;border:none;padding:10px 16px;border-radius:6px;font-weight:600;cursor:pointer;display:none;">Disable Remote</button>
+        </div>
+        <div id="remoteRequiresLocal" style="margin-top:10px;font-size:11px;color:#a1a1aa;display:none;">
+          Local streaming must be running first
+        </div>
+      </div>
+
       <div class="card" id="assetPreviewCard" style="display:none;">
         <div class="card-title">Live Asset</div>
         <div id="assetPreviewContainer" style="background:#0a0a0a;border-radius:6px;overflow:hidden;border:1px solid #262626;aspect-ratio:16/9;margin-bottom:12px;position:relative;">
@@ -1950,6 +1980,8 @@
             handleAck(msg.data);
           } else if (msg.type === 'streaming') {
             updateStreamingUI(msg.data);
+          } else if (msg.type === 'remoteStreaming') {
+            updateRemoteStreamingUI(msg.data);
           }
         } catch {}
       };
@@ -2120,6 +2152,113 @@
       var h = Math.floor(seconds / 3600);
       var m = Math.floor((seconds % 3600) / 60);
       return h + 'h ' + m + 'm';
+    }
+
+    // --- Remote Streaming (VDO.ninja Bridge) ---
+    function startRemoteStream() {
+      var btn = document.getElementById('btnStartRemote');
+      btn.textContent = 'Connecting...';
+      btn.disabled = true;
+      fetch('/api/remote-stream-start', { method: 'POST' })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (data.ok) {
+            updateRemoteStreamingUI(data);
+          } else {
+            btn.textContent = 'Failed';
+            document.getElementById('remoteError').textContent = data.error || 'Unknown error';
+            document.getElementById('remoteError').style.display = 'block';
+            setTimeout(function() { btn.textContent = 'Enable Remote'; btn.disabled = false; }, 3000);
+          }
+        })
+        .catch(function(e) {
+          btn.textContent = 'Error';
+          setTimeout(function() { btn.textContent = 'Enable Remote'; btn.disabled = false; }, 3000);
+        });
+    }
+
+    function stopRemoteStream() {
+      var btn = document.getElementById('btnStopRemote');
+      btn.textContent = 'Stopping...';
+      btn.disabled = true;
+      fetch('/api/remote-stream-stop', { method: 'POST' })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          updateRemoteStreamingUI(data);
+        })
+        .catch(function() {
+          btn.textContent = 'Disable Remote';
+          btn.disabled = false;
+        });
+    }
+
+    function updateRemoteStreamingUI(state) {
+      var statusEl = document.getElementById('remoteStatus');
+      var startBtn = document.getElementById('btnStartRemote');
+      var stopBtn = document.getElementById('btnStopRemote');
+      var urlRow = document.getElementById('remoteUrlRow');
+      var urlInput = document.getElementById('remoteViewerUrl');
+      var viewersRow = document.getElementById('remoteViewersRow');
+      var viewerCountEl = document.getElementById('remoteViewerCount');
+      var errorEl = document.getElementById('remoteError');
+      var requiresLocalEl = document.getElementById('remoteRequiresLocal');
+
+      statusEl.textContent = state.status || 'disconnected';
+      if (state.status === 'connected') {
+        statusEl.className = 'metric-value good';
+      } else if (state.status === 'error') {
+        statusEl.className = 'metric-value danger';
+      } else if (state.status === 'connecting') {
+        statusEl.className = 'metric-value warning';
+      } else {
+        statusEl.className = 'metric-value';
+      }
+
+      if (state.status === 'connected') {
+        startBtn.style.display = 'none';
+        stopBtn.style.display = '';
+        stopBtn.textContent = 'Disable Remote';
+        stopBtn.disabled = false;
+        urlRow.style.display = 'block';
+        urlInput.value = state.viewerUrl || '';
+        viewersRow.style.display = '';
+        viewerCountEl.textContent = state.viewerCount || 0;
+        errorEl.style.display = 'none';
+        requiresLocalEl.style.display = 'none';
+      } else {
+        startBtn.style.display = '';
+        startBtn.textContent = 'Enable Remote';
+        startBtn.disabled = false;
+        stopBtn.style.display = 'none';
+        urlRow.style.display = 'none';
+        viewersRow.style.display = 'none';
+        // Show "requires local" hint if local streaming not running
+        var streamStatus = document.getElementById('streamStatus');
+        if (streamStatus && streamStatus.textContent !== 'running') {
+          requiresLocalEl.style.display = 'block';
+          startBtn.style.opacity = '0.6';
+        } else {
+          requiresLocalEl.style.display = 'none';
+          startBtn.style.opacity = '1';
+        }
+      }
+
+      if (state.error) {
+        errorEl.textContent = state.error;
+        errorEl.style.display = 'block';
+      } else {
+        errorEl.style.display = 'none';
+      }
+    }
+
+    function copyRemoteUrl() {
+      var input = document.getElementById('remoteViewerUrl');
+      input.select();
+      navigator.clipboard.writeText(input.value).then(function() {
+        var btn = event.target;
+        btn.textContent = 'Copied!';
+        setTimeout(function() { btn.textContent = 'Copy'; }, 2000);
+      });
     }
 
     function showAckOnBtn(btn, ack, originalText) {
