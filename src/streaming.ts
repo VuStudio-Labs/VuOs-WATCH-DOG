@@ -10,6 +10,7 @@
 import { Subprocess } from "bun";
 import * as path from "path";
 import * as fs from "fs";
+import { publishStreamStatus } from "./mqtt";
 
 // Streaming state
 export interface StreamingState {
@@ -26,6 +27,7 @@ export interface StreamingConfig {
   stunServer: string;     // External STUN server for NAT traversal
   enableTurn: boolean;    // Enable embedded TURN server
   turnPort: number;       // TURN server port
+  monitor: number | null; // Monitor index (0=first, 1=second, null=all)
 }
 
 const DEFAULT_CONFIG: StreamingConfig = {
@@ -33,10 +35,11 @@ const DEFAULT_CONFIG: StreamingConfig = {
   stunServer: "stun:stun.l.google.com:19302",
   enableTurn: true,
   turnPort: 3478,
+  monitor: 0,             // Default to primary monitor only
 };
 
-// Find webrtc-streamer binary
-const BIN_DIR = path.join(import.meta.dir, "..", "bin");
+// Find webrtc-streamer binary - use cwd for compiled exe compatibility
+const BIN_DIR = path.join(process.cwd(), "bin");
 const STREAMER_EXE = path.join(BIN_DIR, "webrtc-streamer.exe");
 const HTML_DIR = path.join(BIN_DIR, "html");
 
@@ -50,6 +53,28 @@ let currentState: StreamingState = {
   error: null,
 };
 let currentConfig = DEFAULT_CONFIG;
+let activeWallId: string | null = null;
+
+/**
+ * Set the wall ID for MQTT publishing and publish initial status
+ */
+export function setStreamingWallId(wallId: string): void {
+  activeWallId = wallId;
+  // Publish initial status (retained) so subscribers know current state
+  publishStatus();
+}
+
+/**
+ * Publish current streaming status to MQTT
+ */
+function publishStatus(): void {
+  if (!activeWallId) return;
+  publishStreamStatus(activeWallId, {
+    ...currentState,
+    monitor: currentConfig.monitor,
+    available: isStreamerAvailable(),
+  });
+}
 
 /**
  * Check if webrtc-streamer binary exists
@@ -101,13 +126,18 @@ export async function startStreaming(config?: Partial<StreamingConfig>): Promise
   console.log("[streaming] Starting webrtc-streamer...");
 
   try {
+    // Build screen capture URL (screen:// for all, screen://N for specific monitor)
+    const screenUrl = currentConfig.monitor !== null
+      ? `screen://${currentConfig.monitor}`
+      : "screen://";
+
     // Build command line arguments
     const args: string[] = [
       "-H", `0.0.0.0:${currentConfig.port}`,        // HTTP binding
       "-w", HTML_DIR,                                // Web root for viewer
       "-s", currentConfig.stunServer,                // STUN server for NAT traversal
       "-n", "desktop",                               // Stream name
-      "-u", "screen://",                             // Capture screen
+      "-u", screenUrl,                               // Capture screen (specific monitor or all)
     ];
 
     // Enable embedded TURN server for remote access through NAT
@@ -153,6 +183,7 @@ export async function startStreaming(config?: Partial<StreamingConfig>): Promise
 
     console.log(`[streaming] Started on port ${currentConfig.port}`);
     console.log(`[streaming] Viewer URL: ${currentState.viewerUrl}`);
+    publishStatus();
 
     // Monitor process exit
     streamerProcess.exited.then((exitCode) => {
@@ -214,6 +245,7 @@ export async function stopStreaming(): Promise<void> {
   };
 
   console.log("[streaming] Stopped");
+  publishStatus();
 }
 
 /**

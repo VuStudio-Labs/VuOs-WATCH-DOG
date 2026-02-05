@@ -61,6 +61,9 @@ export const TOPICS = {
   commandTo: (wId: string, clientId: string) => `watchdog/${wId}/command/${clientId}`,
   ack:       (wId: string, clientId: string) => `watchdog/${wId}/ack/${clientId}`,
   lease:     (wId: string) => `watchdog/${wId}/lease`,
+
+  // Streaming
+  streamStatus: (wId: string) => `watchdog/${wId}/stream/status`,
 };
 
 export type MessageHandler = (topic: string, payload: Buffer) => void;
@@ -86,7 +89,12 @@ function createClient(
       will: {
         topic: TOPICS.status(wallId),
         payload: Buffer.from(
-          JSON.stringify({ status: "offline", wallId, timestamp: Date.now() })
+          JSON.stringify({
+            status: "offline",
+            wallId,
+            timestamp: Date.now(),
+            stream: { status: "stopped" },
+          })
         ),
         qos: 1,
         retain: true,
@@ -101,7 +109,12 @@ function createClient(
       clearTimeout(timeout);
       client.publish(
         TOPICS.status(wallId),
-        JSON.stringify({ status: "online", wallId, timestamp: Date.now() }),
+        JSON.stringify({
+          status: "online",
+          wallId,
+          timestamp: Date.now(),
+          stream: { status: "stopped" },
+        }),
         { qos: 1, retain: true }
       );
       console.log(`[mqtt] Connected to ${broker.label}`);
@@ -211,4 +224,9 @@ export function publishAck(wallId: string, clientId: string, data: AckPayload): 
 export function publishLease(wallId: string, data: LeasePayload): void {
   if (!activeClient) return;
   activeClient.publish(TOPICS.lease(wallId), JSON.stringify(data), { qos: 1, retain: true });
+}
+
+export function publishStreamStatus(wallId: string, data: object): void {
+  if (!activeClient) return;
+  activeClient.publish(TOPICS.streamStatus(wallId), JSON.stringify(data), { qos: 1, retain: true });
 }

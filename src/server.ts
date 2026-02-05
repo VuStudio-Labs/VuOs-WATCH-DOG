@@ -163,10 +163,28 @@ export function startServer(wallId: string) {
               error: "webrtc-streamer not installed. Run: bun scripts/download-webrtc-streamer.ts"
             }, 400);
           }
-          await startStreaming();
+
+          // Parse optional config from body
+          let config: { monitor?: number } = {};
+          try {
+            const body = await req.json();
+            if (body.monitor !== undefined) config.monitor = body.monitor;
+          } catch {}
+
+          await startStreaming(config);
           const state = getStreamingState();
-          broadcast({ type: "streaming", data: state });
-          return jsonResponse({ ok: true, state });
+          broadcast({ type: "streaming", data: { ...state, available: true } });
+
+          // Auto-start remote viewing
+          try {
+            await startRemoteViewing(wallId);
+            const bridgeState = getRemoteBridgeState();
+            broadcast({ type: "remoteStreaming", data: bridgeState });
+          } catch (e: any) {
+            console.error("[server] Failed to auto-start remote viewing:", e.message);
+          }
+
+          return jsonResponse({ ok: true, state, remote: getRemoteBridgeState() });
         } catch (e: any) {
           return jsonResponse({ ok: false, error: e.message }, 500);
         }
@@ -175,9 +193,14 @@ export function startServer(wallId: string) {
       // Stop streaming
       if (url.pathname === "/api/stream-stop" && req.method === "POST") {
         try {
+          // Stop remote viewing first
+          await stopRemoteViewing();
+          broadcast({ type: "remoteStreaming", data: getRemoteBridgeState() });
+
+          // Then stop local streaming
           await stopStreaming();
           const state = getStreamingState();
-          broadcast({ type: "streaming", data: state });
+          broadcast({ type: "streaming", data: { ...state, available: isStreamerAvailable() } });
           return jsonResponse({ ok: true, state });
         } catch (e: any) {
           return jsonResponse({ ok: false, error: e.message }, 500);

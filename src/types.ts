@@ -118,7 +118,9 @@ export type CommandType =
   | "QUIT_WATCHDOG"
   | "SWITCH_BROKER"
   | "REQUEST_TELEMETRY"
-  | "REQUEST_CONFIG";
+  | "REQUEST_CONFIG"
+  | "START_STREAM"
+  | "STOP_STREAM";
 
 export interface CommandPayload {
   schema: "vu.watchdog.command.v1";

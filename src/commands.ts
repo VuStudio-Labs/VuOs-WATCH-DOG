@@ -19,6 +19,8 @@ const LEGACY_ACTION_MAP: Record<string, CommandType> = {
   "stop-vuos": "STOP_VUOS",
   "quit": "QUIT_WATCHDOG",
   "switch-broker": "SWITCH_BROKER",
+  "start-stream": "START_STREAM",
+  "stop-stream": "STOP_STREAM",
 };
 
 // --- Idempotency store ---

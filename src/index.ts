@@ -11,7 +11,8 @@ import { startAppPolling, collectApp } from "./collectors/app";
 import { startOscListener } from "./collectors/osc";
 import {
   startServer, updateTelemetry, broadcastCommand, broadcastHealth,
-  broadcastEvent, broadcastAck, setCommandProcessor,
+  broadcastEvent, broadcastAck, setCommandProcessor, broadcastStreaming,
+  broadcastRemoteStreaming,
 } from "./server";
 import { evaluateConditions, computeMode, buildHealth, setShuttingDown } from "./health";
 import { WatchdogEventEmitter } from "./events";
@@ -19,6 +20,13 @@ import { CommandProcessor } from "./commands";
 import { LeaseManager } from "./lease";
 import type { TelemetryPayload, LeasePayload, CommandPayload } from "./types";
 import * as path from "path";
+import {
+  startStreaming, stopStreaming, getStreamingState, isStreamerAvailable,
+  setStreamingWallId,
+} from "./streaming";
+import {
+  startRemoteViewing, stopRemoteViewing, getRemoteBridgeState,
+} from "./remote-bridge";
 
 const PUBLISH_INTERVAL_MS = 2_000;
 
@@ -57,6 +65,9 @@ async function main() {
   const config = loadConfig();
   const wallId = config.wallId;
   console.log(`[watchdog] Wall ID: ${wallId}, HTTP port: ${config.httpPort}`);
+
+  // Set wallId for streaming MQTT publishing
+  setStreamingWallId(wallId);
 
   // --- Initialize ops plane ---
 
@@ -161,6 +172,53 @@ async function main() {
       const configs = readConfigs();
       publishConfig(wallId, configs);
       return { message: "Config published", details: {} };
+    },
+  });
+
+  // Streaming commands
+  commandProcessor.registerCommand({
+    type: "START_STREAM",
+    requiresLease: false,
+    localBypass: true,
+    handler: async (args) => {
+      if (!isStreamerAvailable()) {
+        throw new Error("webrtc-streamer not installed");
+      }
+      const monitor = args.monitor !== undefined ? args.monitor : 0;
+      await startStreaming({ monitor });
+      const state = getStreamingState();
+      broadcastStreaming({ ...state, available: true });
+
+      // Auto-start remote viewing
+      try {
+        await startRemoteViewing(wallId);
+        broadcastRemoteStreaming(getRemoteBridgeState());
+      } catch (e: any) {
+        console.error("[streaming] Failed to auto-start remote viewing:", e.message);
+      }
+
+      return {
+        message: "Streaming started",
+        details: { state, remote: getRemoteBridgeState() },
+      };
+    },
+  });
+
+  commandProcessor.registerCommand({
+    type: "STOP_STREAM",
+    requiresLease: false,
+    localBypass: true,
+    handler: async () => {
+      // Stop remote viewing first
+      await stopRemoteViewing();
+      broadcastRemoteStreaming(getRemoteBridgeState());
+
+      // Stop local streaming
+      await stopStreaming();
+      const state = getStreamingState();
+      broadcastStreaming({ ...state, available: isStreamerAvailable() });
+
+      return { message: "Streaming stopped", details: { state } };
     },
   });
 

@@ -2,6 +2,81 @@
 
 This document explains how to set up a remote viewer to watch the watchdog's screen stream.
 
+## MQTT Streaming Control
+
+Control streaming via MQTT commands to `watchdog/{wallId}/command/{clientId}`:
+
+### Start Stream
+```json
+{
+  "schema": "vu.watchdog.command.v1",
+  "ts": 1234567890,
+  "commandId": "unique-id",
+  "ttlMs": 15000,
+  "type": "START_STREAM",
+  "args": {
+    "monitor": 0
+  }
+}
+```
+
+- `monitor`: 0 = primary, 1 = second monitor, null = all monitors
+
+### Stop Stream
+```json
+{
+  "schema": "vu.watchdog.command.v1",
+  "ts": 1234567890,
+  "commandId": "unique-id",
+  "ttlMs": 15000,
+  "type": "STOP_STREAM",
+  "args": {}
+}
+```
+
+### Stream Status
+
+Subscribe to `watchdog/{wallId}/stream/status` for streaming state updates (retained):
+
+```json
+{
+  "status": "running",
+  "pid": 12345,
+  "port": 8000,
+  "startedAt": 1234567890,
+  "viewerUrl": "http://localhost:8000/webrtcstreamer.html?video=desktop",
+  "error": null,
+  "monitor": 0,
+  "available": true
+}
+```
+
+### Watchdog Status (LWT)
+
+Subscribe to `watchdog/{wallId}/status` for watchdog online/offline status. Includes stream status in the payload. Uses MQTT Last Will and Testament (LWT) to automatically publish when watchdog disconnects unexpectedly:
+
+**Online:**
+```json
+{
+  "status": "online",
+  "wallId": "5538",
+  "timestamp": 1234567890,
+  "stream": { "status": "stopped" }
+}
+```
+
+**Offline (LWT):**
+```json
+{
+  "status": "offline",
+  "wallId": "5538",
+  "timestamp": 1234567890,
+  "stream": { "status": "stopped" }
+}
+```
+
+---
+
 ## Architecture
 
 ```
