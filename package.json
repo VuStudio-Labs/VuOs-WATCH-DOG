@@ -10,8 +10,8 @@
     "dev": "bun --watch run src/index.ts",
     "start": "bun run src/index.ts",
     "build": "bun scripts/build.ts",
-    "build:ico": "bun scripts/build-ico.ts",
-    "pack-bin": "bun scripts/pack-bin.ts"
+    "build:single": "bun scripts/build.ts --single",
+    "build:ico": "bun scripts/build-ico.ts"
   },
   "dependencies": {
     "mqtt": "^5.14.1"

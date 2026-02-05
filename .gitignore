@@ -36,3 +36,7 @@ bin/
 # Bun build cache
 *.bun-build
 nul
+
+# Generated embedded binary
+src/embedded-streamer.ts
+vu-watchdog-single.zip

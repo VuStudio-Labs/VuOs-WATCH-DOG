@@ -66,7 +66,7 @@ async function main() {
   console.log("[watchdog] Starting...");
 
   // Initialize assets (extracts embedded webrtc-streamer if needed)
-  const assets = initializeAssets();
+  const assets = await initializeAssets();
   if (assets) {
     console.log(`[watchdog] Streaming assets available`);
   } else {
