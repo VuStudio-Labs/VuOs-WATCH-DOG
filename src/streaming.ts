@@ -33,8 +33,9 @@ export interface StreamQuality {
 export interface StreamingConfig {
   port: number;           // HTTP port for webrtc-streamer (default 8000)
   stunServer: string;     // External STUN server for NAT traversal
-  enableTurn: boolean;    // Enable embedded TURN server
-  turnPort: number;       // TURN server port
+  enableTurn: boolean;    // Enable embedded TURN server (deprecated, use turnServer instead)
+  turnPort: number;       // TURN server port (for embedded TURN)
+  turnServer: string | null; // External TURN server URL (e.g., "turn:user:pass@server:port")
   monitor: number | null; // Monitor index (0=first, 1=second, null=all)
   quality: StreamQuality; // Video quality settings
 }
@@ -46,11 +47,16 @@ export const QUALITY_PRESETS: Record<string, StreamQuality> = {
   high: { width: 1920, height: 1080, fps: 60, bitrate: 6000 },
 };
 
+// Free public TURN server from Open Relay Project (metered.ca)
+// For production, consider getting your own credentials from metered.ca or twilio.com
+const PUBLIC_TURN_SERVER = "turn:openrelayproject:openrelayproject@a.relay.metered.ca:80";
+
 const DEFAULT_CONFIG: StreamingConfig = {
   port: 8000,
   stunServer: "stun:stun.l.google.com:19302",
-  enableTurn: true,
+  enableTurn: false,      // Disable broken embedded TURN
   turnPort: 3478,
+  turnServer: PUBLIC_TURN_SERVER,  // Use public TURN server instead
   monitor: 0,             // Default to primary monitor only
   quality: QUALITY_PRESETS.medium,
 };
@@ -276,10 +282,15 @@ export async function startStreaming(config?: Partial<StreamingConfig>): Promise
       "-u", screenUrl,                               // Capture screen (specific monitor or all)
     ];
 
-    // Enable embedded TURN server for remote access through NAT
-    if (currentConfig.enableTurn) {
+    // Add external TURN server if configured (preferred over embedded)
+    if (currentConfig.turnServer) {
+      console.log(`[streaming] Using external TURN server`);
+      args.push("-s", currentConfig.turnServer);
+    }
+    // Fallback to embedded TURN server (broken external addr, but works on LAN)
+    else if (currentConfig.enableTurn) {
       const localIp = getLocalIp();
-      console.log(`[streaming] Using local IP for TURN: ${localIp}`);
+      console.log(`[streaming] Using embedded TURN with local IP: ${localIp}`);
       args.push("-T", `turn:turn@${localIp}:${currentConfig.turnPort}`);
     }
 
