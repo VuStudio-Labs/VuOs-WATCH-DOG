@@ -6,7 +6,7 @@
  */
 
 import { getActiveClient, TOPICS } from "./mqtt";
-import { getStreamingState } from "./streaming";
+import { getStreamingState, getIceServers } from "./streaming";
 import type { MqttClient } from "mqtt";
 
 // Get the current streamer URL based on streaming port
@@ -135,10 +135,10 @@ export async function startRemoteViewing(wId: string): Promise<string> {
   // Handle incoming messages
   mqttClient.on("message", handleMqttMessage);
 
-  // Publish that we're ready
+  // Publish that we're ready (include iceServers so viewers can configure before first offer)
   mqttClient.publish(
     WEBRTC_TOPICS.offer(wallId),
-    JSON.stringify({ type: "ready", from: myId, wallId }),
+    JSON.stringify({ type: "ready", from: myId, wallId, iceServers: getIceServers() }),
     { qos: 1, retain: true }
   );
 
@@ -289,12 +289,13 @@ async function handleViewerJoin(viewerId: string): Promise<void> {
       hasAudio: offer.sdp?.includes("m=audio"),
     });
 
-    // Send offer via MQTT
+    // Send offer via MQTT (include iceServers so viewer uses same STUN/TURN as sender)
     mqttClient.publish(
       WEBRTC_TOPICS.offer(wallId),
       JSON.stringify({
         type: "offer",
         description: offer,
+        iceServers: getIceServers(),
         to: viewerId,
         from: myId,
       }),

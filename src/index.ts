@@ -152,7 +152,7 @@ async function main() {
   commandProcessor.registerCommand({
     type: "SWITCH_BROKER",
     requiresLease: true,
-    localBypass: false,
+    localBypass: true,
     handler: async (args) => {
       const brokerId = args.brokerId;
       if (!brokerId) throw new Error("Missing brokerId");

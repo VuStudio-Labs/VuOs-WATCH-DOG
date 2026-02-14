@@ -32,10 +32,7 @@ export interface StreamQuality {
 
 export interface StreamingConfig {
   port: number;           // HTTP port for webrtc-streamer (default 8000)
-  stunServer: string;     // External STUN server for NAT traversal
-  enableTurn: boolean;    // Enable embedded TURN server (deprecated, use turnServer instead)
-  turnPort: number;       // TURN server port (for embedded TURN)
-  turnServer: string | null; // External TURN server URL (e.g., "turn:user:pass@server:port")
+  stunServer: string;     // STUN server for NAT traversal
   monitor: number | null; // Monitor index (0=first, 1=second, null=all)
   quality: StreamQuality; // Video quality settings
 }
@@ -58,12 +55,17 @@ const METERED_KEY = "x5temSYro_2G91kS2O9YLshdKL5jD68CBfzgg1J7vUBe32Kq";
 
 // Fallback public TURN (Open Relay Project)
 const PUBLIC_TURN_SERVER = "turn:openrelayproject:openrelayproject@a.relay.metered.ca:80";
+const DEFAULT_STUN = "stun:stun.l.google.com:19302";
 
 interface TurnCredentials {
   urls: string[];
   username: string;
   credential: string;
 }
+
+// Shared ICE servers — same config used by both sender (webrtc-streamer) and viewer (browser)
+let cachedIceServers: object[] = [];
+let cachedTurnCliUrl: string | null = null; // turn:user:pass@host:port for webrtc-streamer -s flag
 
 /**
  * Fetch TURN credentials from Cloudflare (primary)
@@ -107,7 +109,7 @@ async function getCloudfareTurnCredentials(): Promise<TurnCredentials | null> {
 async function getMeteredTurnCredentials(): Promise<TurnCredentials | null> {
   try {
     const res = await fetch(
-      `https://vustudio.metered.live/api/v1/turn/credential?secretKey=${METERED_KEY}`,
+      `https://vustudio.metered.live/api/v1/turn/credentials?apiKey=${METERED_KEY}`,
       { signal: AbortSignal.timeout(5000) }
     );
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -129,16 +131,22 @@ async function getMeteredTurnCredentials(): Promise<TurnCredentials | null> {
 }
 
 /**
- * Get TURN server URL with credentials (tries Cloudflare → Metered → Public)
+ * Fetch TURN credentials and cache for both sender (CLI) and viewer (browser) use.
+ * Tries Cloudflare → Metered → Public fallback.
  */
-async function getTurnServerUrl(): Promise<string> {
+async function fetchTurnCredentials(): Promise<void> {
   // Try Cloudflare first
   const cfCreds = await getCloudfareTurnCredentials();
   if (cfCreds && cfCreds.username && cfCreds.credential) {
     const url = cfCreds.urls[0] || "turn:turn.vu.studio:3478";
     const host = url.replace(/^turns?:/, "").split("?")[0];
     console.log(`[streaming] Using Cloudflare TURN: ${host}`);
-    return `turn:${cfCreds.username}:${cfCreds.credential}@${host}`;
+    cachedTurnCliUrl = `turn:${cfCreds.username}:${cfCreds.credential}@${host}`;
+    cachedIceServers = [
+      { urls: DEFAULT_STUN },
+      { urls: cfCreds.urls, username: cfCreds.username, credential: cfCreds.credential },
+    ];
+    return;
   }
 
   // Try Metered fallback
@@ -147,46 +155,39 @@ async function getTurnServerUrl(): Promise<string> {
     const url = meteredCreds.urls[0] || "turn:a.relay.metered.ca:80";
     const host = url.replace(/^turns?:/, "").split("?")[0];
     console.log(`[streaming] Using Metered TURN: ${host}`);
-    return `turn:${meteredCreds.username}:${meteredCreds.credential}@${host}`;
+    cachedTurnCliUrl = `turn:${meteredCreds.username}:${meteredCreds.credential}@${host}`;
+    cachedIceServers = [
+      { urls: DEFAULT_STUN },
+      { urls: meteredCreds.urls, username: meteredCreds.username, credential: meteredCreds.credential },
+    ];
+    return;
   }
 
   // Fallback to public TURN
   console.log(`[streaming] Using public TURN fallback`);
-  return PUBLIC_TURN_SERVER;
+  cachedTurnCliUrl = PUBLIC_TURN_SERVER;
+  cachedIceServers = [
+    { urls: DEFAULT_STUN },
+    { urls: "turn:a.relay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
+  ];
+}
+
+/**
+ * Get ICE servers config for browser RTCPeerConnection (shared with viewers)
+ */
+export function getIceServers(): object[] {
+  return cachedIceServers;
 }
 
 const DEFAULT_CONFIG: StreamingConfig = {
   port: 8000,
-  stunServer: "stun:stun.l.google.com:19302",
-  enableTurn: true,       // Embedded TURN for server-side relay candidates
-  turnPort: 3478,
-  turnServer: null,
+  stunServer: DEFAULT_STUN,
   monitor: 0,             // Default to primary monitor only
   quality: QUALITY_PRESETS.medium,
 };
 
 // Ports to try if default is busy
 const HTTP_FALLBACK_PORTS = [8000, 8001, 8002, 8003, 8080, 8888];
-const TURN_FALLBACK_PORTS = [3478, 3479, 3480, 3481];
-
-/**
- * Get the local IP address for TURN server external address
- */
-function getLocalIp(): string {
-  try {
-    const { networkInterfaces } = require("os");
-    const nets = networkInterfaces();
-    for (const name of Object.keys(nets)) {
-      for (const net of nets[name]) {
-        // Skip internal/loopback and IPv6
-        if (!net.internal && net.family === "IPv4") {
-          return net.address;
-        }
-      }
-    }
-  } catch {}
-  return "127.0.0.1";
-}
 
 /**
  * Check if a TCP port is available
@@ -217,18 +218,6 @@ async function findAvailableHttpPort(): Promise<number | null> {
   return null;
 }
 
-/**
- * Find an available TURN port
- */
-async function findAvailableTurnPort(): Promise<number | null> {
-  for (const port of TURN_FALLBACK_PORTS) {
-    if (await isPortAvailable(port)) {
-      return port;
-    }
-    console.log(`[streaming] TURN port ${port} is busy, trying next...`);
-  }
-  return null;
-}
 
 let streamerProcess: Subprocess | null = null;
 let currentState: StreamingState = {
@@ -345,21 +334,8 @@ export async function startStreaming(config?: Partial<StreamingConfig>): Promise
 
   currentConfig.port = availablePort;
 
-  // Find available TURN port if enabled
-  if (currentConfig.enableTurn) {
-    const requestedTurnPort = currentConfig.turnPort;
-    const availableTurnPort = await findAvailableTurnPort();
-
-    if (!availableTurnPort) {
-      console.warn(`[streaming] No TURN ports available, disabling TURN`);
-      currentConfig.enableTurn = false;
-    } else {
-      if (availableTurnPort !== requestedTurnPort) {
-        console.log(`[streaming] TURN port ${requestedTurnPort} busy, using ${availableTurnPort}`);
-      }
-      currentConfig.turnPort = availableTurnPort;
-    }
-  }
+  // Fetch shared TURN credentials (used by both sender and viewer)
+  await fetchTurnCredentials();
 
   currentState = {
     status: "starting",
@@ -379,22 +355,17 @@ export async function startStreaming(config?: Partial<StreamingConfig>): Promise
       : "screen://";
 
     // Build command line arguments
+    // Both STUN and TURN passed via -s so webrtc-streamer generates host + srflx + relay candidates
+    const iceUrl = cachedTurnCliUrl
+      ? `${currentConfig.stunServer},${cachedTurnCliUrl}`
+      : currentConfig.stunServer;
+
     const args: string[] = [
       "-H", `0.0.0.0:${currentConfig.port}`,        // HTTP binding (for WebRTC API)
-      "-s", currentConfig.stunServer,                // STUN server for NAT traversal
+      "-s", iceUrl,                                  // STUN + TURN servers
       "-n", "desktop",                               // Stream name
       "-u", screenUrl,                               // Capture screen (specific monitor or all)
     ];
-
-    // Enable embedded TURN server for server-side relay candidates
-    if (currentConfig.enableTurn) {
-      const localIp = getLocalIp();
-      console.log(`[streaming] Embedded TURN on ${localIp}:${currentConfig.turnPort}`);
-      args.push("-T", `turn:turn@${localIp}:${currentConfig.turnPort}`);
-    }
-
-    // Note: Quality settings (width/fps/bitrate) not supported by this webrtc-streamer version
-    // Quality is controlled by the source capture settings, not CLI args
 
     console.log(`[streaming] Command: ${streamerExe} ${args.join(" ")}`);
 

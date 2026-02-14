@@ -13,20 +13,28 @@ export interface BrokerConfig {
 // Broker presets
 const BROKERS: BrokerConfig[] = [
   {
-    id: "emqx",
-    label: "Vu Studio (EMQX)",
-    url: process.env.MQTT_BROKER_URL || "mqtts://c9b6cc55.ala.us-east-1.emqxsl.com:8883",
-    wsUrl: process.env.MQTT_BROKER_WS_URL || "wss://c9b6cc55.ala.us-east-1.emqxsl.com:8084/mqtt",
+    id: "railway",
+    label: "RND",
+    url: process.env.MQTT_BROKER_URL || "mqtt://tramway.proxy.rlwy.net:20979",
+    wsUrl: process.env.MQTT_BROKER_WS_URL || "wss://mqtt.vu.studio/mqtt",
     username: process.env.MQTT_USERNAME || "dev",
     password: process.env.MQTT_PASSWORD || "testing",
   },
   {
-    id: "railway",
-    label: "Railway",
-    url: process.env.MQTT2_BROKER_URL || "mqtt://tramway.proxy.rlwy.net:20979",
-    wsUrl: process.env.MQTT2_BROKER_WS_URL || "wss://mqtt.vu.studio/mqtt",
+    id: "dev",
+    label: "DEV (EMQX)",
+    url: process.env.MQTT2_BROKER_URL || "mqtts://ic7c613e.ala.dedicated.aws.emqxcloud.com:8883",
+    wsUrl: process.env.MQTT2_BROKER_WS_URL || "wss://ic7c613e.ala.dedicated.aws.emqxcloud.com:8084/mqtt",
     username: process.env.MQTT2_USERNAME || "dev",
-    password: process.env.MQTT2_PASSWORD || "testing",
+    password: process.env.MQTT2_PASSWORD || "FQciaThxNmd3awq6",
+  },
+  {
+    id: "prod",
+    label: "PROD (EMQX)",
+    url: process.env.MQTT3_BROKER_URL || "mqtts://me19067f.ala.us-east-1.emqxsl.com:8883",
+    wsUrl: process.env.MQTT3_BROKER_WS_URL || "wss://me19067f.ala.us-east-1.emqxsl.com:8084/mqtt",
+    username: process.env.MQTT3_USERNAME || "production",
+    password: process.env.MQTT3_PASSWORD || "78aa8db9-01e5-4038-b506-1ace676ef85d",
   },
 ];
 

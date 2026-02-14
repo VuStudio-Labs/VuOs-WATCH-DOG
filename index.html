@@ -360,6 +360,38 @@
           <span class="metric-label">Disk I/O</span>
           <span class="metric-value" id="diskIO">—</span>
         </div>
+
+        <div style="border-top:1px solid #262626;margin:14px 0;"></div>
+        <div class="card-title" style="margin-bottom:12px;">Streaming</div>
+        <div class="metric-row">
+          <span class="metric-label">Stream</span>
+          <span class="metric-value" id="streamStatus">stopped</span>
+        </div>
+        <div class="metric-row" id="streamUptimeRow" style="display:none;">
+          <span class="metric-label">Uptime</span>
+          <span class="metric-value" id="streamUptime">—</span>
+        </div>
+        <div class="metric-row" id="remoteRow" style="display:none;">
+          <span class="metric-label">Remote</span>
+          <span class="metric-value"><span id="remoteStatus">off</span><span id="remoteViewerCount" style="margin-left:6px;color:#737373;display:none;"></span></span>
+        </div>
+        <div id="remoteUrlRow" style="display:none;margin-top:8px;">
+          <div style="display:flex;gap:6px;">
+            <input type="text" id="remoteViewerUrl" readonly onclick="this.select()" style="flex:1;background:#1a1a1a;border:1px solid #262626;border-radius:6px;padding:6px 8px;color:#fff;font-family:'SF Mono','Fira Code',monospace;font-size:10px;">
+            <button onclick="copyRemoteUrl(this)" style="background:#3b82f6;color:#fff;border:none;padding:6px 10px;border-radius:6px;font-weight:600;cursor:pointer;font-size:11px;">Copy</button>
+          </div>
+        </div>
+        <div id="remoteError" style="display:none;margin-top:8px;padding:8px;background:#7f1d1d;border-radius:6px;font-size:10px;color:#fca5a5;"></div>
+        <div id="streamNotAvailable" style="margin-top:8px;padding:8px;background:#7f1d1d;border-radius:6px;font-size:10px;color:#fca5a5;display:none;">
+          webrtc-streamer not found
+        </div>
+        <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">
+          <button id="btnStartStream" onclick="startStream()" style="flex:1;min-width:80px;background:#22c55e;color:#000;border:none;padding:8px 12px;border-radius:6px;font-weight:600;cursor:pointer;font-size:12px;">Start</button>
+          <button id="btnStopStream" onclick="stopStream()" style="flex:1;min-width:80px;background:#ef4444;color:#fff;border:none;padding:8px 12px;border-radius:6px;font-weight:600;cursor:pointer;font-size:12px;display:none;">Stop</button>
+          <button id="btnStartRemote" onclick="startRemoteStream()" style="flex:1;min-width:80px;background:#8b5cf6;color:#fff;border:none;padding:8px 12px;border-radius:6px;font-weight:600;cursor:pointer;font-size:12px;display:none;">Remote</button>
+          <button id="btnStopRemote" onclick="stopRemoteStream()" style="flex:1;min-width:80px;background:#ef4444;color:#fff;border:none;padding:8px 12px;border-radius:6px;font-weight:600;cursor:pointer;font-size:12px;display:none;">Stop Remote</button>
+          <a id="streamViewerLink" href="#" target="_blank" style="flex:1;min-width:80px;text-align:center;background:#3b82f6;color:#fff;border:none;padding:8px 12px;border-radius:6px;font-weight:600;text-decoration:none;font-size:12px;display:none;">Viewer</a>
+        </div>
       </div>
 
       <div class="card" id="networkConfigCard">
@@ -522,60 +554,7 @@
         <div style="margin-top:10px;padding:10px;background:#1a1a1a;border-radius:6px;font-family:'SF Mono','Fira Code',monospace;font-size:11px;color:#ef4444;word-break:break-all;min-height:36px;" id="errMessage">—</div>
       </div>
 
-      <div class="card" id="streamingCard">
-        <div class="card-title">Screen Streaming</div>
-        <div class="metric-row">
-          <span class="metric-label">Status</span>
-          <span class="metric-value" id="streamStatus">—</span>
-        </div>
-        <div class="metric-row">
-          <span class="metric-label">Uptime</span>
-          <span class="metric-value" id="streamUptime">—</span>
-        </div>
-        <div class="metric-row">
-          <span class="metric-label">Port</span>
-          <span class="metric-value" id="streamPort">8000</span>
-        </div>
-        <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">
-          <button id="btnStartStream" onclick="startStream()" style="flex:1;min-width:100px;background:#22c55e;color:#000;border:none;padding:10px 16px;border-radius:6px;font-weight:600;cursor:pointer;">Start Stream</button>
-          <button id="btnStopStream" onclick="stopStream()" style="flex:1;min-width:100px;background:#ef4444;color:#fff;border:none;padding:10px 16px;border-radius:6px;font-weight:600;cursor:pointer;display:none;">Stop Stream</button>
-          <a id="streamViewerLink" href="#" target="_blank" style="flex:1;min-width:100px;text-align:center;background:#3b82f6;color:#fff;border:none;padding:10px 16px;border-radius:6px;font-weight:600;text-decoration:none;display:none;">Open Viewer</a>
-        </div>
-        <div id="streamNotAvailable" style="margin-top:12px;padding:10px;background:#7f1d1d;border-radius:6px;font-size:11px;color:#fca5a5;display:none;">
-          webrtc-streamer not installed.<br/>
-          Run: <code style="background:#450a0a;padding:2px 4px;border-radius:3px;">bun scripts/download-webrtc-streamer.ts</code>
-        </div>
-      </div>
-
-      <div class="card" id="remoteStreamingCard">
-        <div class="card-title">Remote Streaming</div>
-        <div style="font-size:11px;color:#a1a1aa;margin-bottom:12px;">
-          Enable remote viewing without port forwarding via VDO.ninja
-        </div>
-        <div class="metric-row">
-          <span class="metric-label">Status</span>
-          <span class="metric-value" id="remoteStatus">disconnected</span>
-        </div>
-        <div class="metric-row" id="remoteViewersRow" style="display:none;">
-          <span class="metric-label">Viewers</span>
-          <span class="metric-value" id="remoteViewerCount">0</span>
-        </div>
-        <div id="remoteUrlRow" style="display:none;margin-top:12px;">
-          <div style="font-size:11px;color:#a1a1aa;margin-bottom:6px;">Share this URL with remote viewers:</div>
-          <div style="display:flex;gap:6px;">
-            <input type="text" id="remoteViewerUrl" readonly onclick="this.select()" style="flex:1;background:#1a1a1a;border:1px solid #262626;border-radius:6px;padding:8px 10px;color:#fff;font-family:'SF Mono','Fira Code',monospace;font-size:11px;">
-            <button onclick="copyRemoteUrl(this)" style="background:#3b82f6;color:#fff;border:none;padding:8px 12px;border-radius:6px;font-weight:600;cursor:pointer;font-size:12px;">Copy</button>
-          </div>
-        </div>
-        <div id="remoteError" style="display:none;margin-top:12px;padding:10px;background:#7f1d1d;border-radius:6px;font-size:11px;color:#fca5a5;"></div>
-        <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">
-          <button id="btnStartRemote" onclick="startRemoteStream()" style="flex:1;min-width:100px;background:#8b5cf6;color:#fff;border:none;padding:10px 16px;border-radius:6px;font-weight:600;cursor:pointer;">Enable Remote</button>
-          <button id="btnStopRemote" onclick="stopRemoteStream()" style="flex:1;min-width:100px;background:#ef4444;color:#fff;border:none;padding:10px 16px;border-radius:6px;font-weight:600;cursor:pointer;display:none;">Disable Remote</button>
-        </div>
-        <div id="remoteRequiresLocal" style="margin-top:10px;font-size:11px;color:#a1a1aa;display:none;">
-          Local streaming must be running first
-        </div>
-      </div>
+      <!-- Streaming consolidated into System card below -->
 
       <div class="card" id="assetPreviewCard" style="display:none;">
         <div class="card-title">Live Asset</div>
@@ -2096,13 +2075,14 @@
     function updateStreamingUI(state) {
       var statusEl = document.getElementById('streamStatus');
       var uptimeEl = document.getElementById('streamUptime');
-      var portEl = document.getElementById('streamPort');
+      var uptimeRow = document.getElementById('streamUptimeRow');
       var startBtn = document.getElementById('btnStartStream');
       var stopBtn = document.getElementById('btnStopStream');
+      var remoteBtn = document.getElementById('btnStartRemote');
       var viewerLink = document.getElementById('streamViewerLink');
       var notAvailable = document.getElementById('streamNotAvailable');
+      var remoteRow = document.getElementById('remoteRow');
 
-      // Show/hide not available warning
       if (state.available === false) {
         notAvailable.style.display = 'block';
         startBtn.disabled = true;
@@ -2115,29 +2095,29 @@
       statusEl.textContent = state.status || 'stopped';
       statusEl.className = 'metric-value ' + (state.status === 'running' ? 'good' : state.status === 'error' ? 'danger' : '');
 
-      if (state.port) portEl.textContent = state.port;
-
       if (state.status === 'running') {
         startBtn.style.display = 'none';
         stopBtn.style.display = '';
-        stopBtn.textContent = 'Stop Stream';
+        stopBtn.textContent = 'Stop';
         stopBtn.disabled = false;
         viewerLink.style.display = '';
-        // Build viewer URL - use current hostname with streaming port
+        remoteBtn.style.display = '';
+        remoteRow.style.display = '';
+        uptimeRow.style.display = '';
         var host = window.location.hostname || 'localhost';
         viewerLink.href = 'http://' + host + ':' + (state.port || 8000) + '/webrtcstreamer.html?video=desktop';
-
-        // Update uptime
         if (state.startedAt) {
-          var uptime = Math.floor((Date.now() - state.startedAt) / 1000);
-          uptimeEl.textContent = formatUptime(uptime);
+          uptimeEl.textContent = formatUptime(Math.floor((Date.now() - state.startedAt) / 1000));
         }
       } else {
         startBtn.style.display = '';
-        startBtn.textContent = 'Start Stream';
+        startBtn.textContent = 'Start';
         startBtn.disabled = state.available === false;
         stopBtn.style.display = 'none';
         viewerLink.style.display = 'none';
+        remoteBtn.style.display = 'none';
+        remoteRow.style.display = 'none';
+        uptimeRow.style.display = 'none';
         uptimeEl.textContent = '—';
       }
 
@@ -2198,49 +2178,30 @@
       var stopBtn = document.getElementById('btnStopRemote');
       var urlRow = document.getElementById('remoteUrlRow');
       var urlInput = document.getElementById('remoteViewerUrl');
-      var viewersRow = document.getElementById('remoteViewersRow');
       var viewerCountEl = document.getElementById('remoteViewerCount');
       var errorEl = document.getElementById('remoteError');
-      var requiresLocalEl = document.getElementById('remoteRequiresLocal');
 
-      statusEl.textContent = state.status || 'disconnected';
-      if (state.status === 'connected') {
-        statusEl.className = 'metric-value good';
-      } else if (state.status === 'error') {
-        statusEl.className = 'metric-value danger';
-      } else if (state.status === 'connecting') {
-        statusEl.className = 'metric-value warning';
-      } else {
-        statusEl.className = 'metric-value';
-      }
+      var label = state.status === 'connected' ? 'on' : state.status === 'connecting' ? 'connecting' : 'off';
+      statusEl.textContent = label;
+      statusEl.className = state.status === 'connected' ? 'good' : state.status === 'error' ? 'danger' : '';
 
       if (state.status === 'connected') {
         startBtn.style.display = 'none';
         stopBtn.style.display = '';
-        stopBtn.textContent = 'Disable Remote';
+        stopBtn.textContent = 'Stop Remote';
         stopBtn.disabled = false;
         urlRow.style.display = 'block';
         urlInput.value = state.viewerUrl || '';
-        viewersRow.style.display = '';
-        viewerCountEl.textContent = state.viewerCount || 0;
+        viewerCountEl.style.display = '';
+        viewerCountEl.textContent = '(' + (state.viewerCount || 0) + ' viewers)';
         errorEl.style.display = 'none';
-        requiresLocalEl.style.display = 'none';
       } else {
         startBtn.style.display = '';
-        startBtn.textContent = 'Enable Remote';
+        startBtn.textContent = 'Remote';
         startBtn.disabled = false;
         stopBtn.style.display = 'none';
         urlRow.style.display = 'none';
-        viewersRow.style.display = 'none';
-        // Show "requires local" hint if local streaming not running
-        var streamStatus = document.getElementById('streamStatus');
-        if (streamStatus && streamStatus.textContent !== 'running') {
-          requiresLocalEl.style.display = 'block';
-          startBtn.style.opacity = '0.6';
-        } else {
-          requiresLocalEl.style.display = 'none';
-          startBtn.style.opacity = '1';
-        }
+        viewerCountEl.style.display = 'none';
       }
 
       if (state.error) {
